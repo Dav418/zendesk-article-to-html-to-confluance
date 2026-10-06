@@ -4,7 +4,150 @@ A reusable Python tool for migrating a Zendesk Help Center **category** into an 
 
 The migration keeps a local HTML/ZIP backup, recreates Zendesk sections as Confluence pages, uploads images and attachments, and rewrites links between migrated Zendesk articles so they point to their new Confluence pages.
 
-> **Start here if you just want to get it running:** follow **Setup checklist**, **Zendesk credentials**, **Confluence credentials**, then **Run the migration** in that order. You do not need to understand the REST APIs.
+> **Start here:** [Download the ZIP and run it](#download-the-zip-and-run-it). You do not need Git. You do not need to understand the REST APIs.
+
+---
+
+# Download the ZIP and run it
+
+Use this path when someone sends you the project, or when you download it from GitHub. Keep the unzipped folder intact. Do not pull out a single file.
+
+## 1. Download and unzip
+
+Downloading the ZIP is not enough. The tools only run after the ZIP has been unzipped into a normal folder.
+
+1. Open https://github.com/Dav418/zendesk-article-to-html
+2. Click the green **Code** button.
+3. Click **Download ZIP**.
+
+Direct link to the ZIP:
+
+https://github.com/Dav418/zendesk-article-to-html/archive/refs/heads/main.zip
+
+### Unzip on a Mac
+
+1. Open **Downloads**.
+2. Double-click `zendesk-article-to-html-main.zip`.
+3. A folder named `zendesk-article-to-html-main` appears next to the ZIP.
+4. Open that folder. You should see `start.command` in the list. If you only see the ZIP, it is not unzipped yet.
+
+### Unzip on Windows
+
+1. Open **Downloads**.
+2. Right-click `zendesk-article-to-html-main.zip`.
+3. Choose **Extract All**, then **Extract**.
+4. Open the new folder. Keep opening folders until you see `start.bat`.
+5. Do not double-click `start.bat` from the window that opens when you click the ZIP itself. That window has not unzipped the files, and the migration will not work from there.
+
+## 2. Install Python
+
+The tool needs **Python 3.11 or newer**. Check before installing anything else.
+
+### Mac
+
+1. Open **Terminal** (search for Terminal in Spotlight).
+2. Paste this and press Return:
+
+   ```bash
+   python3 --version
+   ```
+
+3. If you see `Python 3.11` or a higher 3.x number, skip the installer.
+4. If the command is not found, or the version is older than 3.11, download the macOS installer from https://www.python.org/downloads/macos/
+5. Open the downloaded `.pkg` and accept the defaults.
+6. Close Terminal, open it again, and run `python3 --version` once more.
+
+### Windows
+
+1. Open **Command Prompt** (search for `cmd`).
+2. Paste this and press Enter:
+
+   ```bat
+   py -3 --version
+   ```
+
+3. If you see `Python 3.11` or a higher 3.x number, skip the installer.
+4. Otherwise download the Windows installer from https://www.python.org/downloads/windows/
+5. Run the installer. On the first screen, tick **Add python.exe to PATH**, then choose **Install Now**.
+6. Close Command Prompt, open it again, and run `py -3 --version` once more.
+
+## 3. Fill in `.env`
+
+The migration reads one settings file, named `.env`. An empty `.env`, or one that still says `PASTE_ZENDESK_TOKEN_HERE`, will not run.
+
+The file sits in the unzipped folder, next to `start.command` and `start.bat`. It is not inside `.venv`.
+
+The first time the start script runs, it creates `.env` from `.env.example` if `.env` is missing or empty, then opens it. You still have to replace the example values and save.
+
+### Find `.env` on a Mac
+
+Finder hides the file because the name starts with a dot.
+
+1. Open the unzipped folder in Finder.
+2. Press **Command + Shift + .** (the period key). Hidden files appear in grey. `.env` is one of them.
+3. Double-click `.env`. If Mac asks which app to use, choose **TextEdit**.
+4. Replace the example values. The [setup checklist](#setup-checklist) says where each value comes from.
+5. Save the file.
+6. Press **Command + Shift + .** again to hide those files.
+
+`.venv` is a different hidden folder. Do not edit anything inside it.
+
+### Find `.env` on Windows
+
+The file is in the same folder as `start.bat`.
+
+1. Open that folder in File Explorer.
+2. If you do not see `.env`, click **View**, then **Show**, and tick **File name extensions** and **Hidden items**.
+3. Double-click `.env`, or let `start.bat` open it in Notepad.
+4. Replace the example values. The [setup checklist](#setup-checklist) says where each value comes from.
+5. Choose **File → Save**.
+
+After `.env` is saved, run the start script again.
+
+## 4. Run the migration
+
+The start script installs the small Python libraries this folder needs, then runs `migrate.py`.
+
+`migrate.py` does four things:
+
+1. Downloads the whole Zendesk category onto this computer. It does this once. Later runs reuse that download.
+2. Checks Confluence without creating pages. If the space, parent page, or a title is wrong, it stops here.
+3. Uploads the **first 5 articles** and asks you to look at them.
+4. If you type `yes`, it uploads the rest in groups of 50. Each group includes the articles already uploaded and adds the next ones. It does not replace the earlier pages.
+
+If Confluence asks the tool to slow down, it waits and continues. If the run stops because the network dropped, run the same start script again. Finished articles are left as they are.
+
+Type anything other than `yes` after the first 5 to stop. The rest are not uploaded. Run the start script again later and type `yes` when you want the rest.
+
+### Mac
+
+Double-click `start.command` in Finder. If macOS blocks it, right-click the file, choose **Open**, and confirm.
+
+If that does not open a useful window, open Terminal, type `bash ` (with the space), drag `start.command` from Finder into the Terminal window, and press Return.
+
+### Windows
+
+In the unzipped folder, double-click `start.bat`.
+
+If the window says the ZIP was not unzipped, close it, use **Extract All** as described above, and double-click `start.bat` in that new folder.
+
+If the window closes immediately, open Command Prompt, `cd` into the unzipped folder, and run:
+
+```bat
+start.bat
+```
+
+## 5. When it stops on a real problem
+
+A normal pause after the first 5 is not a failure. These are failures:
+
+- `.env` is missing, empty, or still has example values
+- Zendesk or Confluence rejects the login (`401`) or the permissions (`403`)
+- the Confluence space or parent page is wrong
+- a page title in the space already matches an article that would be created
+- the Zendesk download itself failed
+
+The window prints what to fix. A technical log is written to `output/migration-error.log` inside the unzipped folder. Fix the problem, then run the start script again.
 
 ---
 
@@ -42,7 +185,9 @@ The repo also supports OAuth tokens, but you do **not** need OAuth if the simple
 
 ---
 
-# 1. Install the repo
+# 1. Install by hand
+
+Skip this section if you ran `start.command` or `start.bat`. Those scripts create the Python environment and install the libraries for you.
 
 ## macOS / Linux
 
@@ -435,6 +580,7 @@ INCLUDE_DRAFTS=true
 ALLOW_PARTIAL_EXPORT=false
 FAIL_ON_UNRESOLVED_ZENDESK_LINKS=false
 REQUEST_TIMEOUT_SECONDS=30
+ARTICLE_LIMIT=
 
 # -----------------------------------------------------------------------------
 # Confluence target
@@ -461,7 +607,47 @@ Never commit the completed `.env` file.
 
 # 6. Run the migration
 
+`migrate.py` (started by `start.command` or `start.bat`) is the normal way to run this. It downloads the category, checks Confluence, uploads 5 articles, waits for you to type `yes`, then uploads the rest in groups of 50.
+
+The commands below are the same steps, run one at a time. Use them when you want to control each batch yourself. `export`, `preflight`, and `upload` use the same Python 3.11 check and the same `.env` check as `start.command` and `start.bat`: a missing, empty, or example `.env` stops the command and explains how to find the file.
+
 The migration is deliberately split into three commands so you do not accidentally create hundreds of Confluence pages while merely testing credentials.
+
+## Try a small batch first
+
+Do not upload the whole category on the first run. Start with **5 articles** and open those Confluence pages. That check is about how the pages look, not about a request limit.
+
+Confluence does not block you at a fixed article count. With the normal email + API token, it blocks short bursts of requests and usually clears within seconds. This tool waits when Confluence asks it to, then continues. Pages already created are saved. If an upload stops anyway, run the same `upload --yes` command again. Articles that already finished are left unchanged.
+
+`--limit` keeps the first N articles, in section order and then article order, and leaves the rest untouched. On upload, drafts do not count toward that number unless `CONFLUENCE_UPLOAD_DRAFTS=true`. Only the sections that contain the selected articles, plus their parent sections, are created. After the first 5 pages look right, use a larger limit, such as 50, or omit `--limit` for the rest.
+
+Export the category once, then upload a handful of articles and check them in Confluence:
+
+```bash
+python main.py export
+python main.py preflight --limit 5
+python main.py upload --limit 5 --yes
+```
+
+When those pages look right, raise the limit. Pages already created are reused, so the next run adds the following articles instead of copying the first ones:
+
+```bash
+python main.py preflight --limit 50
+python main.py upload --limit 50 --yes
+```
+
+Omit `--limit` when you are ready for the rest:
+
+```bash
+python main.py preflight
+python main.py upload --yes
+```
+
+`--limit` on `export` is only for avoiding a full download. A limited export replaces the local manifest with that smaller set, so run a full `python main.py export` before the real migration. Prefer a full export and `--limit` on `preflight` / `upload`.
+
+You can also set `ARTICLE_LIMIT` in `.env`. A `--limit` on the command replaces it for that run. Leave `ARTICLE_LIMIT` blank to mean "every article".
+
+A later run with a smaller limit does not delete pages from the larger run. It also rewrites the section and category index pages in that smaller batch so they list only the current batch. Use the same limit, or a larger one, when you continue.
 
 ## Step 1 - Export everything from Zendesk
 
@@ -683,6 +869,8 @@ Duplicate titles inside the migration itself are also made unique when necessary
 
 # 12. Resume behaviour
 
+`--limit` uses this same state file. A later upload with a higher limit creates the additional articles and reuses pages from the smaller run.
+
 Once an upload starts, the tool creates:
 
 ```text
@@ -752,6 +940,16 @@ Those are normally Zendesk Messaging credentials. They are not Help Center API c
 ## Zendesk: admin cannot see `Add API token`
 
 Possible reasons include account policy or Zendesk's API-token retirement. Use Zendesk OAuth instead. From **27 October 2026**, Zendesk says new Support API-token creation is blocked for everyone.
+
+## Confluence: still limiting requests
+
+The upload waits and retries when Confluence answers "too many requests". If it still stops, wait the number of minutes it prints and run the same command again:
+
+```bash
+python main.py upload --limit 5 --yes
+```
+
+Use the same `--limit` as the run that stopped. Pages already created are reused, and articles that already finished are not uploaded again.
 
 ## Confluence: `401 Unauthorized`
 

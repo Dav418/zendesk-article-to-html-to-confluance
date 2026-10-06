@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -10,6 +14,37 @@ from requests.auth import HTTPBasicAuth
 from urllib3.util.retry import Retry
 
 from zendesk_confluence_migrator.config import ConfluenceSettings, ExportSettings
+
+
+_MAX_RATE_LIMIT_ATTEMPTS = 6
+_MAX_WAIT_SECONDS = 15 * 60
+
+
+def rate_limit_wait_seconds(retry_after: str | None, attempt: int) -> int:
+    """Seconds to wait after Confluence says to slow down."""
+    parsed = _parse_retry_after(retry_after)
+    if parsed is None:
+        return min(32, 2 ** max(attempt, 0))
+    return parsed
+
+
+def _parse_retry_after(value: str | None) -> int | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return max(0, int(float(text)))
+    except ValueError:
+        pass
+    try:
+        moment = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return max(0, int((moment - datetime.now(timezone.utc)).total_seconds()))
 
 
 class ConfluenceClient:
@@ -136,19 +171,26 @@ class ConfluenceClient:
 
     def upload_attachment(self, *, page_id: str, file_path: Path) -> dict[str, Any]:
         url = f"{self._wiki_base}/rest/api/content/{page_id}/child/attachment"
-        headers = {"X-Atlassian-Token": "nocheck"}
-        with file_path.open("rb") as handle:
-            response = self._session.put(
-                url,
-                headers=headers,
-                files={"file": (file_path.name, handle)},
-                data={
-                    "minorEdit": "true",
-                    "comment": "Migrated from Zendesk Help Center",
-                },
-                timeout=self._export_settings.request_timeout_seconds,
-            )
-        self._raise_for_response(response, operation=f"upload attachment {file_path.name}")
+        operation = f"upload attachment {file_path.name}"
+        response: requests.Response | None = None
+        for attempt in range(_MAX_RATE_LIMIT_ATTEMPTS):
+            with file_path.open("rb") as handle:
+                response = self._session.put(
+                    url,
+                    headers={"X-Atlassian-Token": "nocheck"},
+                    files={"file": (file_path.name, handle)},
+                    data={
+                        "minorEdit": "true",
+                        "comment": "Migrated from Zendesk Help Center",
+                    },
+                    timeout=self._export_settings.request_timeout_seconds,
+                )
+            if self._wait_for_rate_limit(response, attempt, operation):
+                continue
+            break
+        assert response is not None
+        self._pause_if_near_burst_limit(response)
+        self._raise_for_response(response, operation=operation)
         payload = response.json()
         if not isinstance(payload, dict):
             raise RuntimeError("Confluence returned a non-object attachment response")
@@ -173,21 +215,75 @@ class ConfluenceClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        response = self._session.request(
-            method,
-            f"{self._wiki_base}{path}",
-            params=params,
-            json=json,
-            headers={"Content-Type": "application/json"} if json is not None else None,
-            timeout=self._export_settings.request_timeout_seconds,
-        )
-        self._raise_for_response(response, operation=f"{method} {path}")
+        operation = f"{method} {path}"
+        response: requests.Response | None = None
+        for attempt in range(_MAX_RATE_LIMIT_ATTEMPTS):
+            response = self._session.request(
+                method,
+                f"{self._wiki_base}{path}",
+                params=params,
+                json=json,
+                headers={"Content-Type": "application/json"} if json is not None else None,
+                timeout=self._export_settings.request_timeout_seconds,
+            )
+            if self._wait_for_rate_limit(response, attempt, operation):
+                continue
+            break
+        assert response is not None
+        self._pause_if_near_burst_limit(response)
+        self._raise_for_response(response, operation=operation)
         payload = response.json()
         if not isinstance(payload, dict):
             raise RuntimeError("Confluence returned a non-object JSON response")
         return payload
 
+    def _wait_for_rate_limit(
+        self,
+        response: requests.Response,
+        attempt: int,
+        operation: str,
+    ) -> bool:
+        limited = response.status_code == 429 or (
+            response.status_code == 503 and bool(response.headers.get("Retry-After"))
+        )
+        if not limited or attempt >= _MAX_RATE_LIMIT_ATTEMPTS - 1:
+            return False
+        wait = rate_limit_wait_seconds(response.headers.get("Retry-After"), attempt)
+        if wait > _MAX_WAIT_SECONDS:
+            minutes = max(1, (wait + 59) // 60)
+            raise RuntimeError(
+                "Confluence is limiting requests and asked for a wait of about "
+                f"{minutes} minutes. Run the same command again after that. "
+                "Pages already created will be reused."
+            )
+        logging.warning(
+            "Confluence is busy during %s and asked this tool to wait %s seconds. "
+            "Waiting. Pages already created are saved.",
+            operation,
+            wait,
+        )
+        time.sleep(wait)
+        return True
+
+    def _pause_if_near_burst_limit(self, response: requests.Response) -> None:
+        remaining = response.headers.get("X-RateLimit-Remaining")
+        if remaining is None:
+            return
+        try:
+            left = int(remaining)
+        except ValueError:
+            return
+        if left <= 1:
+            logging.info("Confluence is close to its short request limit. Pausing for 1 second.")
+            time.sleep(1)
+
     def _raise_for_response(self, response: requests.Response, *, operation: str) -> None:
+        if response.status_code == 429:
+            raise RuntimeError(
+                "Confluence is still limiting requests after several waits. "
+                "Run the same command again in a few minutes. "
+                "Pages already created will be reused."
+            )
         if response.status_code == 401:
             raise RuntimeError(
                 "Confluence returned 401 Unauthorized. Check the Confluence API/OAuth token "

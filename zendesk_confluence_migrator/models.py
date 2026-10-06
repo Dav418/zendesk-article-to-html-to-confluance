@@ -103,6 +103,9 @@ class MigrationManifest:
     html_space_folder: str
     sections: list[SectionRecord]
     articles: list[ArticleRecord]
+    article_limit: int | None = None
+    articles_in_source: int | None = None
+    export_ok: bool = True
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,6 +134,15 @@ class MigrationManifest:
             html_space_folder=str(data["html_space_folder"]),
             sections=[SectionRecord.from_dict(item) for item in data.get("sections", [])],
             articles=[ArticleRecord.from_dict(item) for item in data.get("articles", [])],
+            article_limit=(
+                int(data["article_limit"]) if data.get("article_limit") is not None else None
+            ),
+            articles_in_source=(
+                int(data["articles_in_source"])
+                if data.get("articles_in_source") is not None
+                else None
+            ),
+            export_ok=bool(data.get("export_ok", True)),
         )
 
 
@@ -163,6 +175,7 @@ class UploadState:
     planned_section_titles: dict[int, str] = field(default_factory=dict)
     planned_article_titles: dict[int, str] = field(default_factory=dict)
     planned_root_title: str | None = None
+    completed_article_fingerprints: dict[int, str] = field(default_factory=dict)
 
     def save(self, path: Path) -> None:
         payload = {
@@ -182,6 +195,10 @@ class UploadState:
                 str(key): value for key, value in self.planned_article_titles.items()
             },
             "planned_root_title": self.planned_root_title,
+            "completed_article_fingerprints": {
+                str(key): value
+                for key, value in self.completed_article_fingerprints.items()
+            },
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -221,4 +238,8 @@ class UploadState:
                 if data.get("planned_root_title") is not None
                 else None
             ),
+            completed_article_fingerprints={
+                int(key): str(value)
+                for key, value in data.get("completed_article_fingerprints", {}).items()
+            },
         )

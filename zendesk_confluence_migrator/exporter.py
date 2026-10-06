@@ -5,6 +5,7 @@ import json
 import logging
 import mimetypes
 import shutil
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,12 @@ from zendesk_confluence_migrator.naming import (
     safe_filename,
     short_hash,
 )
+from zendesk_confluence_migrator.selection import apply_article_limit, sections_for_articles
+from zendesk_confluence_migrator.workspace import (
+    publish_successful_export,
+    recover_interrupted_export,
+    workspace_is_usable,
+)
 from zendesk_confluence_migrator.zendesk_client import ZendeskClient
 
 
@@ -36,8 +43,10 @@ class KnowledgeBaseExporter:
         self._client = client
         self._issues: list[dict[str, object]] = []
         self._asset_failures = 0
+        self._article_limit: int | None = None
+        self._articles_in_source = 0
 
-    def run(self) -> Path:
+    def run(self, *, article_limit: int | None = None) -> Path:
         logging.info("Reading Zendesk category, sections, and articles...")
         category = self._client.get_category()
         raw_sections = self._client.list_sections()
@@ -53,30 +62,52 @@ class KnowledgeBaseExporter:
 
         category_name = str(category.get("name") or f"Category {self._config.zendesk.category_id}")
         safe_category_name = safe_filename(category_name, fallback="Zendesk Knowledge Base")
-        workspace_dir = (
+        final_dir = (
             self._config.export.output_dir.resolve()
             / f"zendesk-category-{self._config.zendesk.category_id}"
         )
+        recover_interrupted_export(final_dir)
+        state_path = final_dir / "confluence-upload-state.json"
+        state_bytes = state_path.read_bytes() if state_path.is_file() else None
+        workspace_dir = final_dir.with_name(final_dir.name + ".in-progress")
+        if workspace_dir.exists():
+            shutil.rmtree(workspace_dir)
+        workspace_dir.mkdir(parents=True, exist_ok=True)
         html_space_dir = workspace_dir / "html" / safe_category_name
-        self._prepare_workspace(workspace_dir)
         html_space_dir.mkdir(parents=True, exist_ok=True)
 
-        sections = self._build_sections(raw_sections)
-        page_stems = self._build_article_stems(raw_articles)
+        sorted_raw = self._sort_articles(raw_articles, raw_sections)
+        self._articles_in_source = len(sorted_raw)
+        self._article_limit = article_limit
+        selected_raw = apply_article_limit(sorted_raw, article_limit)
+        all_sections = self._build_sections(raw_sections)
+        sections = sections_for_articles(
+            all_sections,
+            [self._as_int(article.get("section_id")) for article in selected_raw],
+        )
+        page_stems = self._build_article_stems(selected_raw)
         articles: list[ArticleRecord] = []
         article_rows: list[dict[str, object]] = []
 
         logging.info(
             "Found %d article(s) in %d section(s) for locale %s.",
-            len(raw_articles),
-            len(sections),
+            self._articles_in_source,
+            len(all_sections),
             self._config.zendesk.locale,
         )
+        if article_limit is not None and len(selected_raw) < self._articles_in_source:
+            logging.info(
+                "Article limit %d: exporting the first %d of %d article(s), in section and "
+                "article order. Omit --limit and leave ARTICLE_LIMIT blank to export the rest.",
+                article_limit,
+                len(selected_raw),
+                self._articles_in_source,
+            )
 
-        for index, raw_article in enumerate(self._sort_articles(raw_articles, raw_sections), start=1):
+        for index, raw_article in enumerate(selected_raw, start=1):
             article_id = self._required_int(raw_article, "id")
             title = str(raw_article.get("title") or f"Article {article_id}")
-            logging.info("[%d/%d] Exporting %s", index, len(raw_articles), title)
+            logging.info("[%d/%d] Exporting %s", index, len(selected_raw), title)
             try:
                 article = self._export_article(
                     raw_article=raw_article,
@@ -124,6 +155,8 @@ class KnowledgeBaseExporter:
             html_space_folder=safe_category_name,
             sections=sections,
             articles=articles,
+            article_limit=article_limit if len(articles) < self._articles_in_source else None,
+            articles_in_source=self._articles_in_source,
         )
         manifest_path = workspace_dir / "manifest.json"
         manifest.save(manifest_path)
@@ -139,9 +172,10 @@ class KnowledgeBaseExporter:
         report_csv = workspace_dir / "migration-report.csv"
         report_json = workspace_dir / "migration-report.json"
         zip_path = workspace_dir / f"{safe_category_name}-confluence-import.zip"
+        public_zip = final_dir / zip_path.name
         self._write_csv(report_csv, article_rows)
 
-        summary = self._summary(manifest, zip_path)
+        summary = self._summary(manifest, public_zip)
         report_json.write_text(
             json.dumps(summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -154,13 +188,38 @@ class KnowledgeBaseExporter:
             )
 
         if blocking and not self._config.export.allow_partial_export:
-            logging.error(
-                "Export has blocking errors. The manifest/reports were written but the ZIP "
-                "was not created. Review %s.",
-                report_json,
-            )
+            manifest = replace(manifest, export_ok=False)
+            manifest.save(manifest_path)
             self._print_summary(summary, zip_created=False)
-            raise RuntimeError("Export contains blocking errors; see migration-report.json")
+            if workspace_is_usable(final_dir):
+                failure_path = final_dir / "last-export-failure.json"
+                failure_path.write_text(
+                    json.dumps(summary, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                shutil.rmtree(workspace_dir)
+                logging.error(
+                    "Export failed. The previous export was kept at %s. Details: %s",
+                    final_dir,
+                    failure_path,
+                )
+                raise RuntimeError(
+                    "Export contains blocking errors. The previous export was kept. "
+                    f"See {failure_path}"
+                )
+            if final_dir.exists():
+                shutil.rmtree(final_dir)
+            workspace_dir.rename(final_dir)
+            if state_bytes is not None:
+                (final_dir / "confluence-upload-state.json").write_bytes(state_bytes)
+            logging.error(
+                "Export failed, so upload will refuse this folder. Review %s",
+                final_dir / "migration-report.json",
+            )
+            raise RuntimeError(
+                "Export contains blocking errors. Nothing will be uploaded until export "
+                f"succeeds. See {final_dir / 'migration-report.json'}"
+            )
 
         self._create_zip(html_space_dir, zip_path)
         summary["zip_created"] = True
@@ -169,8 +228,9 @@ class KnowledgeBaseExporter:
             json.dumps(summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        publish_successful_export(workspace_dir, final_dir, state_bytes)
         self._print_summary(summary, zip_created=True)
-        return workspace_dir
+        return final_dir
 
     def _export_article(
         self,
@@ -387,6 +447,8 @@ class KnowledgeBaseExporter:
                 "source_url": manifest.category_source_url,
             },
             "articles_found": len(manifest.articles),
+            "articles_in_source": manifest.articles_in_source,
+            "article_limit": manifest.article_limit,
             "sections_found": len(manifest.sections),
             "draft_articles": sum(1 for article in manifest.articles if article.draft),
             "restricted_articles": sum(1 for article in manifest.articles if article.restricted),
@@ -433,17 +495,6 @@ class KnowledgeBaseExporter:
         if created_path != zip_path:
             created_path.replace(zip_path)
 
-    def _prepare_workspace(self, workspace_dir: Path) -> None:
-        if workspace_dir.exists():
-            state_path = workspace_dir / "confluence-upload-state.json"
-            preserved_state = state_path.read_bytes() if state_path.exists() else None
-            shutil.rmtree(workspace_dir)
-            workspace_dir.mkdir(parents=True, exist_ok=True)
-            if preserved_state is not None:
-                state_path.write_bytes(preserved_state)
-        else:
-            workspace_dir.mkdir(parents=True, exist_ok=True)
-
     def _unique_media_name(self, value: str, used: set[str], *, suffix_hint: str) -> str:
         safe = safe_filename(value, fallback=f"asset-{suffix_hint}", max_length=120)
         candidate = safe
@@ -483,6 +534,11 @@ class KnowledgeBaseExporter:
         print()
         print("=== Zendesk export summary ===")
         print(f"Articles exported:           {summary['articles_found']}")
+        if summary.get("article_limit"):
+            print(
+                f"Article limit:               {summary['article_limit']} "
+                f"of {summary['articles_in_source']}"
+            )
         print(f"Sections exported:           {summary['sections_found']}")
         print(f"Assets downloaded:           {summary['assets_downloaded']}")
         print(f"Asset failures:              {summary['asset_failures']}")

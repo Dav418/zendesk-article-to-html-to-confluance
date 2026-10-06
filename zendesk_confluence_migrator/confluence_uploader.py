@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -18,6 +19,26 @@ from zendesk_confluence_migrator.models import (
     UploadState,
 )
 from zendesk_confluence_migrator.naming import bounded_title, unique_title
+from zendesk_confluence_migrator.selection import apply_article_limit, sections_for_articles
+
+
+def article_content_fingerprint(article: ArticleRecord) -> str:
+    payload = {
+        "title": article.title,
+        "body_html": article.body_html,
+        "draft": article.draft,
+        "assets": [
+            {
+                "file_name": asset.file_name,
+                "relative_path": asset.relative_path,
+                "inline": asset.inline,
+                "image": asset.image,
+            }
+            for asset in article.assets
+        ],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -29,6 +50,9 @@ class MigrationPlan:
     upload_article_ids: set[int]
     title_conflicts: list[dict[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    article_limit: int | None = None
+    articles_available: int = 0
+    drafts_skipped: int = 0
 
 
 class ConfluenceUploader:
@@ -51,7 +75,13 @@ class ConfluenceUploader:
         self._preflight_path = workspace_dir / "confluence-preflight.json"
         self._renderer = ConfluenceStorageRenderer(manifest)
 
-    def preflight(self) -> MigrationPlan:
+    def preflight(self, *, article_limit: int | None = None) -> MigrationPlan:
+        if not self._manifest.export_ok:
+            raise RuntimeError(
+                "The Zendesk export did not finish cleanly, so nothing will be sent to "
+                "Confluence. Look at migration-report.json in the export folder, then run "
+                "`python main.py export` again."
+            )
         logging.info("Checking Confluence target space and parent page...")
         space = self._client.get_space(self._settings.space_key)
         returned_key = str(space.get("key") or "")
@@ -85,21 +115,53 @@ class ConfluenceUploader:
         if state:
             self._validate_state_pages(state, pages_by_id)
 
-        upload_article_ids = {
+        eligible_ids = {
             article.id
             for article in self._manifest.articles
             if self._settings.upload_drafts or not article.draft
         }
+        ordered_eligible = self._upload_articles(eligible_ids)
+        selected_articles = apply_article_limit(ordered_eligible, article_limit)
+        upload_article_ids = {article.id for article in selected_articles}
+        selected_sections = sections_for_articles(
+            self._manifest.sections,
+            [article.section_id for article in selected_articles],
+        )
+        selected_section_ids = {section.id for section in selected_sections}
         skipped_drafts = [
-            article for article in self._manifest.articles if article.id not in upload_article_ids
+            article for article in self._manifest.articles if article.id not in eligible_ids
         ]
-        restricted = [
-            article
-            for article in self._manifest.articles
-            if article.id in upload_article_ids and article.restricted
-        ]
+        restricted = [article for article in selected_articles if article.restricted]
 
         warnings: list[str] = []
+        if (
+            self._manifest.article_limit is not None
+            and self._manifest.articles_in_source is not None
+            and len(self._manifest.articles) < self._manifest.articles_in_source
+        ):
+            warnings.append(
+                "This export was created with an article limit and only contains "
+                f"{len(self._manifest.articles)} of {self._manifest.articles_in_source} "
+                "article(s). Re-run `python main.py export` without --limit before migrating "
+                "the rest of the category."
+            )
+        if article_limit is not None and len(selected_articles) < len(ordered_eligible):
+            warnings.append(
+                f"Article limit is {article_limit}. This run includes the first "
+                f"{len(selected_articles)} of {len(ordered_eligible)} article(s), in section "
+                "and article order. Raise the limit, or omit it, to continue with the rest. "
+                "Pages already created by this migration are reused. Section and category "
+                "index pages in this batch list only this batch."
+            )
+        if state and article_limit is not None:
+            outside_batch = [
+                article_id for article_id in state.articles if article_id not in upload_article_ids
+            ]
+            if outside_batch:
+                warnings.append(
+                    f"Upload state already contains {len(outside_batch)} article page(s) outside "
+                    "this batch. Those pages stay in Confluence and are not updated."
+                )
         if skipped_drafts:
             warnings.append(
                 f"{len(skipped_drafts)} draft article(s) will NOT be uploaded because "
@@ -115,6 +177,12 @@ class ConfluenceUploader:
 
         title_conflicts: list[dict[str, str]] = []
         used_planned: set[str] = set()
+        self._reserve_titles_outside_batch(
+            state,
+            section_ids=selected_section_ids,
+            article_ids=upload_article_ids,
+            used_planned=used_planned,
+        )
 
         root_title: str | None = None
         if self._settings.create_category_root:
@@ -137,6 +205,8 @@ class ConfluenceUploader:
 
         section_titles: dict[int, str] = {}
         for section in self._ordered_sections():
+            if section.id not in selected_section_ids:
+                continue
             if state and section.id in state.sections:
                 title = state.sections[section.id].title
                 if title.casefold() in used_planned:
@@ -159,7 +229,7 @@ class ConfluenceUploader:
             section_titles[section.id] = title
 
         article_titles: dict[int, str] = {}
-        for article in self._upload_articles(upload_article_ids):
+        for article in selected_articles:
             if state and article.id in state.articles:
                 title = state.articles[article.id].title
                 if title.casefold() in used_planned:
@@ -197,13 +267,16 @@ class ConfluenceUploader:
             upload_article_ids=upload_article_ids,
             title_conflicts=title_conflicts,
             warnings=warnings,
+            article_limit=article_limit,
+            articles_available=len(ordered_eligible),
+            drafts_skipped=len(skipped_drafts),
         )
         self._write_preflight_report(plan, parent)
         self._print_preflight(plan)
         return plan
 
-    def upload(self) -> None:
-        plan = self.preflight()
+    def upload(self, *, article_limit: int | None = None) -> None:
+        plan = self.preflight(article_limit=article_limit)
         if not plan.valid:
             raise RuntimeError(
                 "Confluence preflight failed. No new pages were created. Review "
@@ -250,7 +323,10 @@ class ConfluenceUploader:
             parent = self._client.get_page(self._settings.parent_page_id)
             category_url = self._client.page_url(parent, space_key=self._settings.space_key)
 
-        for section in self._ordered_sections():
+        planned_sections = [
+            section for section in self._ordered_sections() if section.id in plan.section_titles
+        ]
+        for section in planned_sections:
             if section.id in state.sections:
                 continue
             parent_page_id = root_parent_id
@@ -290,6 +366,27 @@ class ConfluenceUploader:
         issues: list[dict[str, object]] = []
         for index, article in enumerate(upload_articles, start=1):
             page_state = state.articles[article.id]
+            fingerprint = article_content_fingerprint(article)
+            if state.completed_article_fingerprints.get(article.id) == fingerprint:
+                logging.info(
+                    "[%d/%d] Already uploaded, leaving %s unchanged",
+                    index,
+                    len(upload_articles),
+                    page_state.title,
+                )
+                report_rows.append(
+                    self._report_row(
+                        article,
+                        page_state,
+                        content_status="already up to date",
+                        assets_uploaded=0,
+                        internal_links_rewritten=0,
+                        attachment_links_rewritten=0,
+                        images_rewritten=0,
+                        unresolved_zendesk_links=0,
+                    )
+                )
+                continue
             logging.info(
                 "[%d/%d] Uploading assets/content for %s",
                 index,
@@ -317,32 +414,29 @@ class ConfluenceUploader:
                 title=page_state.title,
                 body_storage=body,
             )
+            state.completed_article_fingerprints[article.id] = fingerprint
+            state.save(self._state_path)
             report_rows.append(
-                {
-                    "zendesk_article_id": article.id,
-                    "zendesk_title": article.title,
-                    "confluence_title": page_state.title,
-                    "confluence_page_id": page_state.page_id,
-                    "confluence_url": page_state.url,
-                    "section_id": article.section_id,
-                    "draft": article.draft,
-                    "restricted_in_zendesk": article.restricted,
-                    "assets_uploaded": len(article.assets),
-                    "internal_links_rewritten": stats.internal_links_rewritten,
-                    "attachment_links_rewritten": stats.attachment_links_rewritten,
-                    "images_rewritten": stats.images_rewritten,
-                    "unresolved_zendesk_links": stats.unresolved_zendesk_links,
-                }
+                self._report_row(
+                    article,
+                    page_state,
+                    content_status="uploaded",
+                    assets_uploaded=len(article.assets),
+                    internal_links_rewritten=stats.internal_links_rewritten,
+                    attachment_links_rewritten=stats.attachment_links_rewritten,
+                    images_rewritten=stats.images_rewritten,
+                    unresolved_zendesk_links=stats.unresolved_zendesk_links,
+                )
             )
 
         children_by_parent: dict[int | None, list[SectionRecord]] = {}
-        for section in self._manifest.sections:
+        for section in planned_sections:
             children_by_parent.setdefault(section.parent_section_id, []).append(section)
         articles_by_section: dict[int | None, list[ArticleRecord]] = {}
         for article in upload_articles:
             articles_by_section.setdefault(article.section_id, []).append(article)
 
-        for section in reversed(self._ordered_sections()):
+        for section in reversed(planned_sections):
             body = self._renderer.render_section(
                 section=section,
                 child_sections=children_by_parent.get(section.id, []),
@@ -360,10 +454,10 @@ class ConfluenceUploader:
             )
 
         if self._settings.create_category_root and state.root is not None:
-            section_ids = {section.id for section in self._manifest.sections}
+            section_ids = {section.id for section in planned_sections}
             top_level = [
                 section
-                for section in self._manifest.sections
+                for section in planned_sections
                 if section.parent_section_id is None or section.parent_section_id not in section_ids
             ]
             body = self._renderer.render_category(
@@ -382,8 +476,19 @@ class ConfluenceUploader:
         self._write_upload_report(report_rows, issues, state)
         print()
         print("=== Confluence upload complete ===")
-        print(f"Articles uploaded:      {len(report_rows)}")
-        print(f"Sections created:       {len(state.sections)}")
+        print(
+            "Articles updated:       "
+            f"{sum(1 for row in report_rows if row['content_status'] == 'uploaded')}"
+        )
+        print(
+            "Articles already done:  "
+            f"{sum(1 for row in report_rows if row['content_status'] == 'already up to date')}"
+        )
+        if plan.article_limit is not None:
+            print(
+                f"Article limit:          {plan.article_limit} of {plan.articles_available}"
+            )
+        print(f"Sections in state:      {len(state.sections)}")
         print(f"Unresolved links:       {sum(int(row['unresolved_zendesk_links']) for row in report_rows)}")
         print(f"State file:             {self._state_path}")
         print(f"Upload report:          {self._workspace_dir / 'confluence-upload-report.csv'}")
@@ -418,6 +523,30 @@ class ConfluenceUploader:
         title_conflicts.append({"entity": entity, "title": base})
         used_planned.add(folded)
         return base
+
+    def _reserve_titles_outside_batch(
+        self,
+        state: UploadState | None,
+        *,
+        section_ids: set[int],
+        article_ids: set[int],
+        used_planned: set[str],
+    ) -> None:
+        """Hold titles of pages from earlier batches so this batch cannot reuse them."""
+        if state is None:
+            return
+        for section_id, page in state.sections.items():
+            if section_id not in section_ids:
+                used_planned.add(page.title.casefold())
+        for section_id, title in state.planned_section_titles.items():
+            if section_id not in section_ids and section_id not in state.sections:
+                used_planned.add(title.casefold())
+        for article_id, page in state.articles.items():
+            if article_id not in article_ids:
+                used_planned.add(page.title.casefold())
+        for article_id, title in state.planned_article_titles.items():
+            if article_id not in article_ids and article_id not in state.articles:
+                used_planned.add(title.casefold())
 
     def _ordered_sections(self) -> list[SectionRecord]:
         by_id = {section.id: section for section in self._manifest.sections}
@@ -537,10 +666,10 @@ class ConfluenceUploader:
             },
             "counts": {
                 "sections": len(plan.section_titles),
+                "articles_available": plan.articles_available,
+                "article_limit": plan.article_limit,
                 "articles_to_upload": len(plan.article_titles),
-                "drafts_skipped": sum(
-                    1 for article in self._manifest.articles if article.id not in plan.upload_article_ids
-                ),
+                "drafts_skipped": plan.drafts_skipped,
                 "restricted_articles": sum(
                     1
                     for article in self._manifest.articles
@@ -566,6 +695,12 @@ class ConfluenceUploader:
         print(f"Space:                   {self._settings.space_key}")
         print(f"Parent page ID:          {self._settings.parent_page_id}")
         print(f"Create category root:    {self._settings.create_category_root}")
+        if plan.article_limit is None:
+            print(f"Article limit:           none ({plan.articles_available} available)")
+        else:
+            print(
+                f"Article limit:           {plan.article_limit} of {plan.articles_available}"
+            )
         print(f"Sections planned:        {len(plan.section_titles)}")
         print(f"Articles planned:        {len(plan.article_titles)}")
         print(f"Title conflicts:         {len(plan.title_conflicts)}")
@@ -579,6 +714,35 @@ class ConfluenceUploader:
                 print(f"  ... and {len(plan.title_conflicts) - 20} more")
         print(f"Preflight report:        {self._preflight_path}")
         print(f"Result:                  {'PASS' if plan.valid else 'FAIL'}")
+
+    def _report_row(
+        self,
+        article: ArticleRecord,
+        page_state: ConfluencePageState,
+        *,
+        content_status: str,
+        assets_uploaded: int,
+        internal_links_rewritten: int,
+        attachment_links_rewritten: int,
+        images_rewritten: int,
+        unresolved_zendesk_links: int,
+    ) -> dict[str, object]:
+        return {
+            "zendesk_article_id": article.id,
+            "zendesk_title": article.title,
+            "confluence_title": page_state.title,
+            "confluence_page_id": page_state.page_id,
+            "confluence_url": page_state.url,
+            "section_id": article.section_id,
+            "draft": article.draft,
+            "restricted_in_zendesk": article.restricted,
+            "content_status": content_status,
+            "assets_uploaded": assets_uploaded,
+            "internal_links_rewritten": internal_links_rewritten,
+            "attachment_links_rewritten": attachment_links_rewritten,
+            "images_rewritten": images_rewritten,
+            "unresolved_zendesk_links": unresolved_zendesk_links,
+        }
 
     def _write_upload_report(
         self,
@@ -596,6 +760,7 @@ class ConfluenceUploader:
             "section_id",
             "draft",
             "restricted_in_zendesk",
+            "content_status",
             "assets_uploaded",
             "internal_links_rewritten",
             "attachment_links_rewritten",

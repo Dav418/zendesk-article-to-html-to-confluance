@@ -33,6 +33,19 @@ def _required(name: str) -> str:
     return value
 
 
+def _optional_positive_int(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
 @dataclass(frozen=True)
 class ZendeskSettings:
     category_url: str
@@ -52,6 +65,7 @@ class ExportSettings:
     allow_partial_export: bool
     fail_on_unresolved_zendesk_links: bool
     request_timeout_seconds: int
+    article_limit: int | None
 
 
 @dataclass(frozen=True)
@@ -127,6 +141,7 @@ class AppConfig:
                 os.getenv("FAIL_ON_UNRESOLVED_ZENDESK_LINKS"), False
             ),
             request_timeout_seconds=timeout,
+            article_limit=_optional_positive_int("ARTICLE_LIMIT"),
         )
 
         confluence = None
