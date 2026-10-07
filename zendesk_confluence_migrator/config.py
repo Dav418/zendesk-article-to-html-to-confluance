@@ -107,7 +107,6 @@ class ZendeskSettings:
     category_id: int
     email: str | None
     api_token: str | None
-    oauth_token: str | None
     oauth_client_id: str | None = None
     oauth_client_secret: str | None = None
 
@@ -127,7 +126,6 @@ class ConfluenceSettings:
     base_url: str
     email: str | None
     api_token: str | None
-    oauth_token: str | None
     space_key: str
     parent_page_id: str
     create_category_root: bool
@@ -185,7 +183,6 @@ class AppConfig:
             category_id=int(match.group("category_id")),
             email=zendesk_email,
             api_token=zendesk_api_token,
-            oauth_token=None,
             oauth_client_id=zendesk_client_id,
             oauth_client_secret=zendesk_client_secret,
         )
@@ -234,7 +231,6 @@ class AppConfig:
                 base_url=base_url,
                 email=confluence_email,
                 api_token=confluence_api_token,
-                oauth_token=None,
                 space_key=_required("CONFLUENCE_SPACE_KEY"),
                 parent_page_id=_required("CONFLUENCE_PARENT_PAGE_ID"),
                 create_category_root=_parse_bool(

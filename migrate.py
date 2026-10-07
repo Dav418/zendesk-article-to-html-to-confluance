@@ -126,7 +126,8 @@ def run() -> int:
             if not remaining:
                 _print_finished(workspace)
                 return 0
-            print("Continuing the upload. Articles that already finished are left as they are.")
+            print("Continuing the upload. Pages already created are kept.")
+            print("Links in those pages are updated when they point at a page created in this batch.")
             _upload_counts(uploader, remaining, plan.articles_available)
             _print_finished(workspace)
             return 0
@@ -191,7 +192,7 @@ def _print_finished(workspace: Path) -> None:
     if root:
         print(f"Open: {root}")
     print("Check the pages, images, and links in Confluence.")
-    print("Then delete the temporary Zendesk and Atlassian tokens.")
+    print("Then revoke the Zendesk and Confluence API tokens or OAuth clients you used for this.")
 
 
 def main() -> int:

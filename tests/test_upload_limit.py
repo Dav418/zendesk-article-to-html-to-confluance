@@ -14,6 +14,7 @@ from zendesk_confluence_migrator.confluence_uploader import (
 )
 from zendesk_confluence_migrator.models import (
     ArticleRecord,
+    AssetRecord,
     ConfluencePageState,
     MigrationManifest,
     SectionRecord,
@@ -101,7 +102,6 @@ def _config() -> AppConfig:
             category_id=100,
             email=None,
             api_token=None,
-            oauth_token=None,
         ),
         export=ExportSettings(
             output_dir=Path("output"),
@@ -113,9 +113,8 @@ def _config() -> AppConfig:
         ),
         confluence=ConfluenceSettings(
             base_url="https://company.atlassian.net",
-            email=None,
-            api_token=None,
-            oauth_token="token",
+            email="person@company.com",
+            api_token="token",
             space_key="OPS",
             parent_page_id="1",
             create_category_root=True,
@@ -205,6 +204,127 @@ def test_preflight_limit_reuses_titles_from_an_earlier_batch(tmp_path: Path):
     assert set(plan.article_titles) == {2}
     assert plan.article_titles[2] == "Shared (Zendesk article-2)"
     assert any("outside this batch" in warning for warning in plan.warnings)
+
+
+class _RecordingConfluence:
+    def __init__(self) -> None:
+        self.pages = {
+            "1": {"id": "1", "title": "Parent", "space": {"key": "OPS"}},
+        }
+        self.bodies: dict[str, list[str]] = {}
+        self.attachments: list[str] = []
+        self._next_id = 10
+
+    def get_space(self, space_key: str) -> dict:
+        return {"key": space_key}
+
+    def get_page(self, page_id: str) -> dict:
+        page = dict(self.pages[page_id])
+        page["version"] = {"number": 1}
+        return page
+
+    def list_pages_in_space(self, space_key: str) -> list[dict]:
+        return list(self.pages.values())
+
+    def page_url(self, page: dict, *, space_key: str | None = None) -> str:
+        return f"https://company.atlassian.net/wiki/spaces/OPS/pages/{page['id']}"
+
+    def create_page(
+        self,
+        *,
+        space_key: str,
+        title: str,
+        parent_page_id: str,
+        body_storage: str,
+    ) -> dict:
+        page_id = str(self._next_id)
+        self._next_id += 1
+        page = {"id": page_id, "title": title, "space": {"key": space_key}}
+        self.pages[page_id] = page
+        self.bodies.setdefault(page_id, []).append(body_storage)
+        return page
+
+    def update_page(
+        self,
+        *,
+        page_id: str,
+        space_key: str,
+        title: str,
+        body_storage: str,
+    ) -> dict:
+        self.pages[page_id]["title"] = title
+        self.bodies.setdefault(page_id, []).append(body_storage)
+        return self.pages[page_id]
+
+    def upload_attachment(self, *, page_id: str, file_path: Path) -> None:
+        self.attachments.append(page_id)
+
+
+def test_later_batch_updates_links_in_earlier_articles_without_reuploading_files(tmp_path: Path):
+    (tmp_path / "shot.png").write_bytes(b"png")
+    first = _article(10, title="First", section_id=1, position=0)
+    first = ArticleRecord(
+        id=first.id,
+        title=first.title,
+        body_html=(
+            '<p><a href="https://company.zendesk.com/hc/en-gb/articles/20-second">Second</a></p>'
+        ),
+        source_url=first.source_url,
+        section_id=first.section_id,
+        position=first.position,
+        draft=first.draft,
+        restricted=first.restricted,
+        page_stem=first.page_stem,
+        export_file=first.export_file,
+        assets=[
+            AssetRecord(
+                file_name="shot.png",
+                relative_path="shot.png",
+                source_urls=[],
+            )
+        ],
+    )
+    second = _article(20, title="Second", section_id=1, position=1)
+    manifest = MigrationManifest(
+        schema_version=1,
+        generated_at_utc="2026-10-06T00:00:00+00:00",
+        zendesk_origin="https://company.zendesk.com",
+        zendesk_host="company.zendesk.com",
+        locale="en-gb",
+        category_id=100,
+        category_name="Knowledge",
+        category_description_html="",
+        category_source_url="https://company.zendesk.com/hc/en-gb/categories/100-knowledge",
+        html_space_folder="Knowledge",
+        sections=[SectionRecord(1, "Guides", "", None, None, 0)],
+        articles=[first, second],
+        export_ok=True,
+    )
+    client = _RecordingConfluence()
+    uploader = ConfluenceUploader(
+        config=_config(),
+        client=client,
+        manifest=manifest,
+        workspace_dir=tmp_path,
+    )
+
+    uploader.upload(article_limit=1)
+    state = UploadState.load(tmp_path / "confluence-upload-state.json")
+    first_page_id = state.articles[10].page_id
+    assert "articles/20" in client.bodies[first_page_id][-1]
+    assert client.attachments == [first_page_id]
+
+    uploader.upload()
+    state = UploadState.load(tmp_path / "confluence-upload-state.json")
+    updated = client.bodies[first_page_id][-1]
+    assert state.articles[20].url in updated
+    assert "articles/20" not in updated
+    assert client.attachments == [first_page_id]
+    rewritten_length = len(client.bodies[first_page_id])
+
+    uploader.upload()
+    assert len(client.bodies[first_page_id]) == rewritten_length
+    assert client.attachments == [first_page_id]
 
 
 def test_preflight_without_a_limit_includes_every_uploadable_article(tmp_path: Path):

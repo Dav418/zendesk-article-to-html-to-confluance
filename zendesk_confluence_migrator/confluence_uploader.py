@@ -22,6 +22,21 @@ from zendesk_confluence_migrator.naming import bounded_title, unique_title
 from zendesk_confluence_migrator.selection import apply_article_limit, sections_for_articles
 
 
+def link_target_fingerprint(
+    article_urls: dict[int, str],
+    section_urls: dict[int, str],
+    category_url: str,
+) -> str:
+    """Identifies which Confluence pages a body could link to."""
+    payload = {
+        "articles": {str(key): value for key, value in sorted(article_urls.items())},
+        "sections": {str(key): value for key, value in sorted(section_urls.items())},
+        "category": category_url,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def article_content_fingerprint(article: ArticleRecord) -> str:
     payload = {
         "title": article.title,
@@ -150,8 +165,9 @@ class ConfluenceUploader:
                 f"Article limit is {article_limit}. This run includes the first "
                 f"{len(selected_articles)} of {len(ordered_eligible)} article(s), in section "
                 "and article order. Raise the limit, or omit it, to continue with the rest. "
-                "Pages already created by this migration are reused. Section and category "
-                "index pages in this batch list only this batch."
+                "Pages already created by this migration are reused, and links in those "
+                "pages are updated when the page they point at now exists. Section and "
+                "category index pages in this batch list only this batch."
             )
         if state and article_limit is not None:
             outside_batch = [
@@ -361,13 +377,16 @@ class ConfluenceUploader:
 
         article_urls = {article_id: page.url for article_id, page in state.articles.items()}
         section_urls = {section_id: page.url for section_id, page in state.sections.items()}
+        link_fingerprint = link_target_fingerprint(article_urls, section_urls, category_url)
 
         report_rows: list[dict[str, object]] = []
         issues: list[dict[str, object]] = []
         for index, article in enumerate(upload_articles, start=1):
             page_state = state.articles[article.id]
             fingerprint = article_content_fingerprint(article)
-            if state.completed_article_fingerprints.get(article.id) == fingerprint:
+            content_done = state.completed_article_fingerprints.get(article.id) == fingerprint
+            links_done = state.completed_article_link_targets.get(article.id) == link_fingerprint
+            if content_done and links_done:
                 logging.info(
                     "[%d/%d] Already uploaded, leaving %s unchanged",
                     index,
@@ -387,19 +406,31 @@ class ConfluenceUploader:
                     )
                 )
                 continue
-            logging.info(
-                "[%d/%d] Uploading assets/content for %s",
-                index,
-                len(upload_articles),
-                page_state.title,
-            )
-            for asset in article.assets:
-                path = self._workspace_dir / asset.relative_path
-                if not path.is_file():
-                    raise RuntimeError(
-                        f"Exported asset is missing: {path}. Re-run the Zendesk export first."
-                    )
-                self._client.upload_attachment(page_id=page_state.page_id, file_path=path)
+            if content_done:
+                logging.info(
+                    "[%d/%d] Updating links in %s",
+                    index,
+                    len(upload_articles),
+                    page_state.title,
+                )
+                content_status = "links updated"
+                assets_uploaded = 0
+            else:
+                logging.info(
+                    "[%d/%d] Uploading assets/content for %s",
+                    index,
+                    len(upload_articles),
+                    page_state.title,
+                )
+                for asset in article.assets:
+                    path = self._workspace_dir / asset.relative_path
+                    if not path.is_file():
+                        raise RuntimeError(
+                            f"Exported asset is missing: {path}. Re-run the Zendesk export first."
+                        )
+                    self._client.upload_attachment(page_id=page_state.page_id, file_path=path)
+                content_status = "uploaded"
+                assets_uploaded = len(article.assets)
 
             body, stats, article_issues = self._renderer.render_article(
                 article=article,
@@ -415,13 +446,14 @@ class ConfluenceUploader:
                 body_storage=body,
             )
             state.completed_article_fingerprints[article.id] = fingerprint
+            state.completed_article_link_targets[article.id] = link_fingerprint
             state.save(self._state_path)
             report_rows.append(
                 self._report_row(
                     article,
                     page_state,
-                    content_status="uploaded",
-                    assets_uploaded=len(article.assets),
+                    content_status=content_status,
+                    assets_uploaded=assets_uploaded,
                     internal_links_rewritten=stats.internal_links_rewritten,
                     attachment_links_rewritten=stats.attachment_links_rewritten,
                     images_rewritten=stats.images_rewritten,
@@ -483,6 +515,10 @@ class ConfluenceUploader:
         print(
             "Articles already done:  "
             f"{sum(1 for row in report_rows if row['content_status'] == 'already up to date')}"
+        )
+        print(
+            "Article links updated:  "
+            f"{sum(1 for row in report_rows if row['content_status'] == 'links updated')}"
         )
         if plan.article_limit is not None:
             print(

@@ -79,8 +79,6 @@ class ConfluenceClient:
         if self._uses_client_credentials:
             self._login_description = "CONFLUENCE_OAUTH_CLIENT_ID and CONFLUENCE_OAUTH_CLIENT_SECRET"
             self._api_base = self._service_account_api_base()
-        elif settings.oauth_token:
-            self._session.headers["Authorization"] = f"Bearer {settings.oauth_token}"
         else:
             assert settings.email is not None
             assert settings.api_token is not None

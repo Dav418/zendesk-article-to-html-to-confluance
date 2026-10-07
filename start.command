@@ -33,11 +33,18 @@ if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)';
 fi
 
 if [ ! -x ".venv/bin/python" ]; then
-  python3 -m venv .venv || exit 1
+  if ! python3 -m venv .venv; then
+    echo "Could not create the Python environment."
+    read -r -p "Press Enter to close..."
+    exit 1
+  fi
 fi
 
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
+if ! .venv/bin/python -m pip install --upgrade pip || ! .venv/bin/python -m pip install -r requirements.txt; then
+  echo "Could not install the Python packages. Check your internet connection and run this again."
+  read -r -p "Press Enter to close..."
+  exit 1
+fi
 
 .venv/bin/python migrate.py
 status=$?

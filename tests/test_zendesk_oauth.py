@@ -32,7 +32,7 @@ def test_client_credentials_are_exchanged_for_a_bearer_token(monkeypatch):
     assert client._authenticated_session.auth is None
 
 
-def test_email_login_does_not_ask_for_an_oauth_token(monkeypatch):
+def test_email_login_does_not_contact_the_oauth_endpoint(monkeypatch):
     def fake_post(*_args, **_kwargs):
         raise AssertionError("email login must not call the OAuth token URL")
 
@@ -74,7 +74,6 @@ def _settings(**overrides) -> ZendeskSettings:
         "category_id": 999,
         "email": None,
         "api_token": None,
-        "oauth_token": None,
         "oauth_client_id": None,
         "oauth_client_secret": None,
     }

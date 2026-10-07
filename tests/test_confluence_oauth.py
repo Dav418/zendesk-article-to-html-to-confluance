@@ -101,7 +101,6 @@ def _settings(**overrides) -> ConfluenceSettings:
         "base_url": "https://acme.atlassian.net",
         "email": None,
         "api_token": None,
-        "oauth_token": None,
         "space_key": "OPS",
         "parent_page_id": "555",
         "create_category_root": True,

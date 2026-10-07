@@ -176,6 +176,7 @@ class UploadState:
     planned_article_titles: dict[int, str] = field(default_factory=dict)
     planned_root_title: str | None = None
     completed_article_fingerprints: dict[int, str] = field(default_factory=dict)
+    completed_article_link_targets: dict[int, str] = field(default_factory=dict)
 
     def save(self, path: Path) -> None:
         payload = {
@@ -198,6 +199,10 @@ class UploadState:
             "completed_article_fingerprints": {
                 str(key): value
                 for key, value in self.completed_article_fingerprints.items()
+            },
+            "completed_article_link_targets": {
+                str(key): value
+                for key, value in self.completed_article_link_targets.items()
             },
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -241,5 +246,9 @@ class UploadState:
             completed_article_fingerprints={
                 int(key): str(value)
                 for key, value in data.get("completed_article_fingerprints", {}).items()
+            },
+            completed_article_link_targets={
+                int(key): str(value)
+                for key, value in data.get("completed_article_link_targets", {}).items()
             },
         )

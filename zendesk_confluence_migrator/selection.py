@@ -13,7 +13,8 @@ def upload_batches(total: int, *, first: int = 5, size: int = 50) -> list[int]:
     """Article counts to upload, each one including every article before it.
 
     A category of 120 becomes ``[5, 50, 100, 120]``. The first batch is the
-    preview. Later batches add the next articles and leave earlier ones in place.
+    preview. Later batches add the next articles, reuse the earlier pages, and
+    update links in those earlier pages.
     """
     if total <= 0:
         return []

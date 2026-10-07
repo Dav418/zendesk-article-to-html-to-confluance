@@ -73,7 +73,7 @@ The tool needs **Python 3.11 or newer**. Check before installing anything else.
 
 ## 3. Fill in `.env`
 
-The migration reads one settings file, named `.env`. An empty `.env`, or one that still says `PASTE_ZENDESK_TOKEN_HERE`, will not run.
+The migration reads one settings file, named `.env`. An empty `.env`, or one that still has example values such as `you@company.com` or `PASTE_ZENDESK_TOKEN_HERE`, will not run. The [setup checklist](#setup-checklist) lists every value. Zendesk needs one login and Confluence needs one login: email plus API token, or OAuth client ID plus secret. Leave the login you are not using blank.
 
 The file sits in the unzipped folder, next to `start.command` and `start.bat`. It is not inside `.venv`.
 
@@ -121,13 +121,13 @@ Type anything other than `yes` after the first 5 to stop. The rest are not uploa
 
 ### Mac
 
-Double-click `start.command` in Finder. If macOS blocks it, right-click the file, choose **Open**, and confirm.
+Double-click `start.command` in Finder. If macOS says it cannot be opened or cannot be verified, click **Done** (not Move to Bin). Then open **System Settings → Privacy & Security**, scroll down to the message about `start.command`, click **Open Anyway**, and confirm. On older macOS versions, right-click the file, choose **Open**, and confirm instead.
 
 If that does not open a useful window, open Terminal, type `bash ` (with the space), drag `start.command` from Finder into the Terminal window, and press Return.
 
 ### Windows
 
-In the unzipped folder, double-click `start.bat`.
+In the unzipped folder, double-click `start.bat`. If Windows shows **Windows protected your PC**, click **More info**, then **Run anyway**.
 
 If the window says the ZIP was not unzipped, close it, use **Extract All** as described above, and double-click `start.bat` in that new folder.
 
@@ -153,35 +153,36 @@ The window prints what to fix. A technical log is written to `output/migration-e
 
 ## Setup checklist
 
-Before running anything, collect these values.
+Before running anything, collect these values. Zendesk needs **one** login. Confluence needs **one** login. Fill in either the email and API token, or the OAuth client ID and secret. Leave the other login blank.
 
-| Value                     | Example                                                                | Where it comes from                                            |
-| ------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Zendesk category URL      | `https://company.zendesk.com/hc/en-gb/categories/123456-category-name` | Open the category you want to migrate and copy the browser URL |
-| Zendesk email             | `you@company.com`                                                      | Your normal Zendesk login email                                |
-| Zendesk API token         | secret                                                                 | A Zendesk admin creates it; instructions below                 |
-| Confluence base URL       | `https://company.atlassian.net`                                        | Your normal Confluence URL                                     |
-| Confluence email          | `you@company.com`                                                      | Your normal Atlassian/Confluence account email                 |
-| Confluence API token      | secret                                                                 | You normally create this yourself; instructions below          |
-| Confluence space key      | `OPS`                                                                  | Visible in the target space URL                                |
-| Confluence parent page ID | `123456789`                                                            | Visible in the target page URL                                 |
+| Value | Example | Where it comes from |
+| --- | --- | --- |
+| Zendesk category URL | `https://company.zendesk.com/hc/en-gb/categories/123456-category-name` | Open the category you want to migrate and copy the browser URL |
+| Confluence base URL | `https://company.atlassian.net` | Your normal Confluence site address, without `/wiki/spaces/...` |
+| Confluence space key | `OPS` | The text after `/spaces/` in the space URL. See section 4.4 |
+| Confluence parent page ID | `123456789` | The number after `/pages/`, or **••• → Page information** and the `pageId=` number. See section 4.5 |
 
-For the simplest one-off migration, the authentication used by this repo is:
+Zendesk login. Use one row pair, not both.
 
-```text
-Zendesk:   your email + a Zendesk API token
-Confluence: your email + an Atlassian API token
-```
+| Login | Values | Where they come from |
+| --- | --- | --- |
+| Email and API token | `ZENDESK_EMAIL` and `ZENDESK_API_TOKEN` | Your Zendesk login email, and a token an admin creates. See section 2.3 |
+| OAuth client | `ZENDESK_OAUTH_CLIENT_ID` and `ZENDESK_OAUTH_CLIENT_SECRET` | Admin Center → Apps and integrations → APIs → OAuth clients. Copy the Identifier and Secret. See section 2.4 |
 
-If an admin will not give you an API token, both Zendesk and Confluence can use an OAuth client ID and secret instead. The script fetches the access token itself. See sections 2.4 and 4.7.
+Confluence login. Use one row pair, not both.
+
+| Login | Values | Where they come from |
+| --- | --- | --- |
+| Email and API token | `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN` | The email you use for Atlassian, and an API token you create. See section 4.3 |
+| OAuth client | `CONFLUENCE_OAUTH_CLIENT_ID` and `CONFLUENCE_OAUTH_CLIENT_SECRET` | Atlassian Administration → Directory → Service accounts → Create credentials → OAuth 2.0. See section 4.7 |
 
 ### Keep the secrets secret
 
-- Never paste either API token into a ticket, chat, email, screenshot, or commit.
+- Never paste an API token or an OAuth client secret into a ticket, chat, email, screenshot, or commit.
 - Put secrets only in your local `.env` file.
 - `.env` is already ignored by Git in this repo.
 - The example values in `.env.example` are placeholders only.
-- After the migration is finished and checked, revoke/delete the temporary tokens if they are no longer needed.
+- After the migration is finished and checked, revoke the API tokens or OAuth clients you used if they are no longer needed.
 
 ---
 
@@ -211,7 +212,7 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-You will now have a local file called `.env`. That is the file you edit with the real URLs, emails and tokens.
+You will now have a local file called `.env`. That is the file you edit with the real URLs and one login each for Zendesk and Confluence. See the [setup checklist](#setup-checklist).
 
 ---
 
@@ -337,7 +338,9 @@ ZENDESK_EMAIL=
 ZENDESK_API_TOKEN=
 ```
 
-On export, the script sends those two values to Zendesk and uses the access token Zendesk returns. The token lasts 48 hours, which is the longest Zendesk allows. The email + API token route still works: leave the Identifier and Secret blank and fill in `ZENDESK_EMAIL` and `ZENDESK_API_TOKEN` instead.
+On export, the script sends those two values to Zendesk and uses the access token Zendesk returns. The token lasts 48 hours, which is the longest Zendesk allows.
+
+This token acts as the Zendesk admin who created the OAuth client. That admin must be able to see the category, including any restricted articles you want exported. If that admin is later removed or loses admin rights, the login stops working. The email + API token route still works: leave the Identifier and Secret blank and fill in `ZENDESK_EMAIL` and `ZENDESK_API_TOKEN` instead.
 
 Official Zendesk OAuth documentation:
 
@@ -347,7 +350,9 @@ https://developer.zendesk.com/documentation/authentication/creating-and-using-oa
 
 # 3. Export Zendesk locally
 
-At this point the Confluence settings can still be blank. The first command only reads Zendesk and writes files to your computer.
+Fill in `.env` before the first command. Zendesk needs one login, and Confluence needs one login. For each, fill in either the email and API token, or the OAuth client ID and secret. Leave the other login blank. You do not fill in both.
+
+Export checks that file too, so a missing login stops it. The export itself only reads Zendesk and writes files to your computer. It does not change anything in Confluence.
 
 Run:
 
@@ -376,7 +381,7 @@ output/
 
 The ZIP is retained as a backup/alternative even if you use the direct Confluence uploader.
 
-If `export` fails with `401 Unauthorized`, re-check the Zendesk email/token. If it fails with `403 Forbidden`, your Zendesk user may not have permission to read the requested content.
+If `export` fails with `401 Unauthorized`, re-check the Zendesk login you filled in: the email and API token, or the OAuth client Identifier and Secret. If it fails with `403 Forbidden`, that login may not have permission to read the requested content.
 
 ---
 
@@ -384,17 +389,18 @@ If `export` fails with `401 Unauthorized`, re-check the Zendesk email/token. If 
 
 You need an **existing Confluence Cloud space** and an **existing parent page** inside that space. The migration will be created underneath that parent page.
 
-For the easiest setup this repo needs five Confluence values:
+This repo needs these Confluence values:
 
 ```text
 1. Confluence base URL
-2. Your Atlassian/Confluence email
-3. Atlassian API token
-4. Space key
-5. Parent page ID
+2. Space key
+3. Parent page ID
+4. ONE login:
+   - your Atlassian email + an Atlassian API token (sections 4.2 and 4.3), or
+   - an OAuth client ID + secret (section 4.7)
 ```
 
-You normally do **not** need to be a Confluence admin. Your account does need permission to view the target space, create/edit pages below the target parent, and upload attachments.
+With the email + API token login you do **not** need to be a Confluence admin. Your account does need permission to view the target space, create/edit pages below the target parent, and upload attachments. The OAuth client login needs an organisation admin to create it, and the service account needs the same space permissions.
 
 ## 4.1 Get the Confluence base URL
 
@@ -495,19 +501,46 @@ Do not put the whole URL into `CONFLUENCE_SPACE_KEY`.
 
 ## 4.5 Choose the parent page and get its page ID
 
-Open the existing Confluence page underneath which the migrated knowledge base should live.
+The parent page is the existing Confluence page that all migrated pages will be created underneath. The page ID is a number. It is not the page title and not the space key.
 
-For example:
+### Make a page to use as the parent
+
+Create an empty page such as `Zendesk import` and use that as the parent. Everything the tool creates then sits in one place, and a test run is easy to delete.
+
+1. Open the space while logged in.
+2. In the left sidebar, under **Content**, click **+** (or the **Create** button next to the space name).
+3. Type the title, for example `Zendesk import`. Leave the body empty.
+4. The sidebar shows the new page with a grey **Draft** label. A draft has no page ID yet, and the migration cannot use it.
+5. Click **Publish** at the top right. If it asks where to put the page, leave the location as the space home page.
+6. After publishing, the **Draft** label disappears. Now read the page ID with one of the ways below.
+
+### Way 1: read it from the address bar
+
+If the page address contains `/pages/`, the number straight after `/pages/` is the page ID:
 
 ```text
 https://company.atlassian.net/wiki/spaces/OPS/pages/123456789/Knowledge+Base
+                                                    ^^^^^^^^^
+                                                    page ID
 ```
-
-The numeric value immediately after `/pages/` is the page ID:
 
 ```env
 CONFLUENCE_PARENT_PAGE_ID=123456789
 ```
+
+### Way 2: the address has no number (for example a space overview page)
+
+A space's home page often has an address like `https://company.atlassian.net/wiki/spaces/OPS/overview`, with no number in it.
+
+1. Open the page in Confluence while logged in.
+2. Click the **•••** button (More actions) at the top right of the page, next to Share.
+3. Click **Page information**. On some sites it is under **Advanced details**, then **Page information**.
+4. The address bar now contains `pageId=` followed by a number, for example `.../pages/viewinfo.action?pageId=123456789`.
+5. Copy only the digits after `pageId=` into `CONFLUENCE_PARENT_PAGE_ID`.
+
+### Check it
+
+`preflight` checks that the page exists and is in the space set in `CONFLUENCE_SPACE_KEY`. Nothing is uploaded. If the ID is wrong, preflight stops and says so.
 
 In this example the resulting structure will be approximately:
 
@@ -563,6 +596,7 @@ This is the same idea as the Zendesk OAuth client. An organisation admin creates
 
    The names shown by Atlassian may be friendlier descriptions such as **Read Confluence space summary**, **Read Confluence content**, **Write Confluence content**, and **Upload Confluence attachments**. Do not select delete-space or delete-content permissions; this tool does not need them.
 5. Copy the **client ID** and **client secret**. Atlassian shows the secret only once.
+6. Give the service account access to the target space. A service account is not a member of any space by default. In Confluence, open the space, then **Space settings → Users** (or **Permissions**), add the service account, and allow it to view the space, add pages, and add attachments. Without this, preflight fails with `403 Forbidden`.
 
 ```env
 CONFLUENCE_OAUTH_CLIENT_ID=the-client-id
@@ -636,7 +670,7 @@ Never commit the completed `.env` file.
 
 `migrate.py` (started by `start.command` or `start.bat`) is the normal way to run this. It downloads the category, checks Confluence, uploads 5 articles, waits for you to type `yes`, then uploads the rest in groups of 50.
 
-The commands below are the same steps, run one at a time. Use them when you want to control each batch yourself. `export`, `preflight`, and `upload` use the same Python 3.11 check and the same `.env` check as `start.command` and `start.bat`: a missing, empty, or example `.env` stops the command and explains how to find the file.
+The commands below are the same steps, run one at a time. Use them when you want to control each batch yourself. Run them from the project folder with the `.venv` from section 1 active. On a Mac without it active, `python` may not exist or may not have the libraries; use `.venv/bin/python main.py ...` instead. On Windows, use `.venv\Scripts\python.exe main.py ...`. `export`, `preflight`, and `upload` use the same Python 3.11 check and the same `.env` check as `start.command` and `start.bat`: a missing, empty, or example `.env` stops the command and explains how to find the file.
 
 The migration is deliberately split into three commands so you do not accidentally create hundreds of Confluence pages while merely testing credentials.
 
@@ -644,7 +678,7 @@ The migration is deliberately split into three commands so you do not accidental
 
 Do not upload the whole category on the first run. Start with **5 articles** and open those Confluence pages. That check is about how the pages look, not about a request limit.
 
-Confluence does not block you at a fixed article count. With the normal email + API token, it blocks short bursts of requests and usually clears within seconds. This tool waits when Confluence asks it to, then continues. Pages already created are saved. If an upload stops anyway, run the same `upload --yes` command again. Articles that already finished are left unchanged.
+Confluence does not block you at a fixed article count. With the email + API token login, it blocks short bursts of requests and usually clears within seconds. With the OAuth client login, Atlassian can also apply an hourly request allowance, so a big upload may be asked to wait longer. Either way this tool waits when Confluence asks it to, then continues. Pages already created are saved. If an upload stops anyway, run the same `upload --yes` command again. Finished articles are not copied again. If an earlier article links to a page that did not exist yet, the next batch updates that link so it points at the new Confluence page.
 
 `--limit` keeps the first N articles, in section order and then article order, and leaves the rest untouched. On upload, drafts do not count toward that number unless `CONFLUENCE_UPLOAD_DRAFTS=true`. Only the sections that contain the selected articles, plus their parent sections, are created. After the first 5 pages look right, use a larger limit, such as 50, or omit `--limit` for the rest.
 
@@ -656,7 +690,7 @@ python main.py preflight --limit 5
 python main.py upload --limit 5 --yes
 ```
 
-When those pages look right, raise the limit. Pages already created are reused, so the next run adds the following articles instead of copying the first ones:
+When those pages look right, raise the limit. Pages already created are reused, so the next run adds the following articles instead of copying the first ones. Links in the earlier articles are updated to those new pages:
 
 ```bash
 python main.py preflight --limit 50
@@ -743,6 +777,8 @@ The uploader then:
 8. populates the section/index pages.
 
 Creating the pages before rewriting the bodies is what allows article A to link correctly to article B even when article B did not exist in Confluence before the migration.
+
+A later batch does the same for articles uploaded earlier. Their files are not uploaded again. Their page text is updated so a link that still pointed at Zendesk now points at the Confluence page created in this batch.
 
 ---
 
@@ -948,17 +984,25 @@ The upload report includes the Zendesk article ID, original title, final Conflue
 
 ## Zendesk: `401 Unauthorized`
 
-Check:
+The error says which login was used.
 
-- `ZENDESK_EMAIL` is your real verified Zendesk login email;
+If it was the email + API token:
+
+- `ZENDESK_EMAIL` is your real verified Zendesk login email, for an agent or admin;
 - `ZENDESK_API_TOKEN` contains the token and has no accidental spaces;
 - you did not put `/token` onto the email yourself;
-- the token is still active;
-- `ZENDESK_OAUTH_CLIENT_ID` and `ZENDESK_OAUTH_CLIENT_SECRET` are blank when using email + API token. If the Identifier and Secret are filled in, the email and API token are not used.
+- the token is still active, and **Allow API token access** is on in Admin Center;
+- `ZENDESK_OAUTH_CLIENT_ID` and `ZENDESK_OAUTH_CLIENT_SECRET` are blank. If both are filled in, the email and API token are not used.
+
+If it was the OAuth client:
+
+- `ZENDESK_OAUTH_CLIENT_ID` is the client **Identifier**, and `ZENDESK_OAUTH_CLIENT_SECRET` is the full secret;
+- the client kind is **Confidential** and it allows the `hc:read` scope;
+- the admin who created the client still has admin rights.
 
 ## Zendesk: `403 Forbidden`
 
-Authentication may be valid but your Zendesk user may not have permission to see the category/article. The API uses the permissions of the authenticated user.
+Authentication may be valid but the login may not have permission to see the category/article. With email + API token, Zendesk uses your user's permissions. With the OAuth client, it uses the permissions of the admin who created the client.
 
 ## Zendesk: I only have `ZENDESK_KEY_ID` and `ZENDESK_SECRET`
 
@@ -976,21 +1020,29 @@ The upload waits and retries when Confluence answers "too many requests". If it 
 python main.py upload --limit 5 --yes
 ```
 
-Use the same `--limit` as the run that stopped. Pages already created are reused, and articles that already finished are not uploaded again.
+Use the same `--limit` as the run that stopped. Pages already created are reused, and articles that already finished are not uploaded again. A later, larger batch still updates links in those earlier articles when the page they point at has been created.
 
 ## Confluence: `401 Unauthorized`
 
-Check:
+The error says which login was used.
+
+If it was the email + API token:
 
 - `CONFLUENCE_EMAIL` is the Atlassian account that created the token;
 - you copied the full token when it was created;
 - the token has not expired/revoked;
 - you created the standard **Create API token** token, not the scoped-token variant;
-- `CONFLUENCE_OAUTH_CLIENT_ID` and `CONFLUENCE_OAUTH_CLIENT_SECRET` are blank when using email + API token. If both are filled in, the email and API token are not used.
+- `CONFLUENCE_OAUTH_CLIENT_ID` and `CONFLUENCE_OAUTH_CLIENT_SECRET` are blank. If both are filled in, the email and API token are not used.
+
+If it was the OAuth client:
+
+- the client ID and full client secret were copied from the service account's **OAuth 2.0** credential;
+- the credential has not been revoked;
+- it has the four Confluence scopes listed in section 4.7.
 
 ## Confluence: `403 Forbidden`
 
-Authentication can be correct while your Atlassian user lacks permission. Confirm your normal Confluence account can:
+Authentication can be correct while the login lacks permission. With the OAuth client, check that the service account was added to the space (section 4.7, step 6). Confirm the account you are using can:
 
 - view the target space;
 - view the chosen parent page;
@@ -1021,16 +1073,14 @@ Preflight is specifically there to catch this before the script creates pages.
 Once you have checked the Confluence pages, links and attachments:
 
 1. keep the local export/reports somewhere appropriate for your migration records;
-2. revoke/delete the temporary Atlassian API token if it is no longer needed;
-3. ask the Zendesk admin to deactivate/delete the temporary Zendesk API token if it is no longer needed;
+2. revoke the Confluence login you used: the Atlassian API token, or the service-account OAuth credential;
+3. ask the Zendesk admin to revoke the Zendesk login you used: the API token, or the OAuth client;
 4. do not leave `.env` sitting in an insecure shared folder;
 5. never commit `.env` to source control.
 
-For Zendesk API tokens, an admin can manage them under:
+A Zendesk admin removes an API token under **Admin Center → Apps and integrations → APIs → API tokens**, or an OAuth client under **OAuth clients** on that same APIs page.
 
-**Admin Center -> Apps and integrations -> APIs -> API tokens**
-
-For your Atlassian API tokens, manage/revoke them here:
+For an Atlassian API token, revoke it here:
 
 https://id.atlassian.com/manage-profile/security/api-tokens
 
@@ -1057,10 +1107,12 @@ Zendesk:
 - Zendesk API authentication: https://support.zendesk.com/hc/en-us/articles/4408831452954-How-can-I-authenticate-API-requests
 - Zendesk API-token management: https://support.zendesk.com/hc/en-us/articles/4408889192858-Managing-API-token-access-to-the-Zendesk-API
 - Zendesk API-token retirement: https://support.zendesk.com/hc/en-us/articles/10840968198042-Announcing-the-removal-of-API-tokens-as-an-authentication-method-for-API-requests
+- Zendesk OAuth client credentials: https://developer.zendesk.com/documentation/authentication/creating-and-using-oauth-tokens-with-the-api/
 
 Confluence / Atlassian:
 
 - Atlassian API-token management: https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account
 - Confluence basic auth: https://developer.atlassian.com/cloud/confluence/basic-auth-for-rest-apis/
+- Atlassian service-account OAuth credentials: https://support.atlassian.com/user-management/docs/create-oauth-2-0-credential-for-service-accounts/
 - Confluence REST examples: https://developer.atlassian.com/cloud/confluence/rest-api-examples/
 - Confluence attachment API: https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-content---attachments/
