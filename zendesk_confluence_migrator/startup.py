@@ -2,12 +2,72 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import subprocess
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from zendesk_confluence_migrator.config import AppConfig
+
+_ZENDESK_SETTINGS = (
+    ("ZENDESK_CATEGORY_URL", "Paste the browser address of the Zendesk category."),
+)
+_ZENDESK_LOGIN = (
+    ("ZENDESK_EMAIL", "Put your Zendesk login email there."),
+    ("ZENDESK_API_TOKEN", "Paste the Zendesk API token there."),
+)
+_CONFLUENCE_SETTINGS = (
+    ("CONFLUENCE_BASE_URL", "Put your Confluence site address there, like https://company.atlassian.net"),
+    ("CONFLUENCE_SPACE_KEY", "Put the space key there. It is the part after /spaces/ in the address."),
+    ("CONFLUENCE_PARENT_PAGE_ID", "Put the number of the page to upload under there."),
+)
+_CONFLUENCE_LOGIN = (
+    ("CONFLUENCE_EMAIL", "Put the email you use to log in to Confluence there."),
+    ("CONFLUENCE_API_TOKEN", "Paste the Atlassian API token there."),
+)
+_EXAMPLE_VALUES = {
+    "ZENDESK_CATEGORY_URL": ("123456-category-name", "//company.zendesk.com"),
+    "ZENDESK_EMAIL": ("you@company.com",),
+    "ZENDESK_API_TOKEN": ("PASTE_",),
+    "ZENDESK_OAUTH_TOKEN": ("PASTE_",),
+    "CONFLUENCE_BASE_URL": ("//company.atlassian.net",),
+    "CONFLUENCE_EMAIL": ("you@company.com",),
+    "CONFLUENCE_API_TOKEN": ("PASTE_",),
+    "CONFLUENCE_OAUTH_TOKEN": ("PASTE_",),
+    "CONFLUENCE_PARENT_PAGE_ID": ("123456789",),
+}
+
+
+def env_problems(*, require_confluence: bool) -> list[str]:
+    """List every needed .env line that is empty or still has the example value."""
+    groups = [(_ZENDESK_SETTINGS, None), (_ZENDESK_LOGIN, "ZENDESK_OAUTH_TOKEN")]
+    if require_confluence:
+        groups += [(_CONFLUENCE_SETTINGS, None), (_CONFLUENCE_LOGIN, "CONFLUENCE_OAUTH_TOKEN")]
+
+    problems: list[str] = []
+    for settings, oauth_name in groups:
+        if oauth_name and _value(oauth_name):
+            settings = ((oauth_name, "Paste the OAuth token there."),)
+        for name, hint in settings:
+            value = _value(name)
+            if not value:
+                problems.append(f"{name} is empty. {hint}")
+            elif _is_example(name, value):
+                problems.append(f"{name} still has the example value. {hint}")
+    return problems
+
+
+def _value(name: str) -> str:
+    return os.getenv(name, "").strip()
+
+
+def _is_example(name: str, value: str) -> bool:
+    if name == "CONFLUENCE_PARENT_PAGE_ID":
+        return value == "123456789"
+    return any(marker in value for marker in _EXAMPLE_VALUES.get(name, ()))
 
 
 def ensure_python() -> bool:
@@ -138,6 +198,15 @@ def load_checked_config(
             return None
         else:
             print(".env is empty. Fill in your Zendesk and Confluence values.")
+        explain_env_file(env_path, retry_hint=retry_hint)
+        return None
+
+    load_dotenv(env_path)
+    problems = env_problems(require_confluence=require_confluence)
+    if problems:
+        print("These lines in .env need filling in:")
+        for problem in problems:
+            print(f"  - {problem}")
         explain_env_file(env_path, retry_hint=retry_hint)
         return None
 

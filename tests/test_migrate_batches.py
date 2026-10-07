@@ -1,6 +1,6 @@
 from zendesk_confluence_migrator.config import AppConfig, ConfluenceSettings, ExportSettings, ZendeskSettings
 from zendesk_confluence_migrator.selection import upload_batches
-from zendesk_confluence_migrator.startup import load_checked_config
+from zendesk_confluence_migrator.startup import env_problems, load_checked_config
 from migrate import env_file_status, placeholder_problems
 from pathlib import Path
 
@@ -65,6 +65,27 @@ def test_load_checked_config_stops_on_the_example_env(tmp_path: Path, monkeypatc
 
     assert result is None
     assert opened == [tmp_path / ".env"]
+
+
+def test_env_problems_lists_every_empty_line(monkeypatch):
+    for key in _ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ZENDESK_CATEGORY_URL", "https://acme.zendesk.com/hc/en-gb/categories/999-help")
+    monkeypatch.setenv("ZENDESK_API_TOKEN", "real-zendesk-token")
+    monkeypatch.setenv("CONFLUENCE_PARENT_PAGE_ID", "123456789")
+
+    problems = env_problems(require_confluence=True)
+    names = [problem.split(" ", 1)[0] for problem in problems]
+
+    assert names == [
+        "ZENDESK_EMAIL",
+        "CONFLUENCE_BASE_URL",
+        "CONFLUENCE_SPACE_KEY",
+        "CONFLUENCE_PARENT_PAGE_ID",
+        "CONFLUENCE_EMAIL",
+        "CONFLUENCE_API_TOKEN",
+    ]
+    assert "example value" in problems[3]
 
 
 def test_placeholder_problems_accepts_real_values():

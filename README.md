@@ -155,16 +155,16 @@ The window prints what to fix. A technical log is written to `output/migration-e
 
 Before running anything, collect these values.
 
-| Value | Example | Where it comes from |
-|---|---|---|
-| Zendesk category URL | `https://company.zendesk.com/hc/en-gb/categories/123456-category-name` | Open the category you want to migrate and copy the browser URL |
-| Zendesk email | `you@company.com` | Your normal Zendesk login email |
-| Zendesk API token | secret | A Zendesk admin creates it; instructions below |
-| Confluence base URL | `https://company.atlassian.net` | Your normal Confluence URL |
-| Confluence email | `you@company.com` | Your normal Atlassian/Confluence account email |
-| Confluence API token | secret | You normally create this yourself; instructions below |
-| Confluence space key | `OPS` | Visible in the target space URL |
-| Confluence parent page ID | `123456789` | Visible in the target page URL |
+| Value                     | Example                                                                | Where it comes from                                            |
+| ------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Zendesk category URL      | `https://company.zendesk.com/hc/en-gb/categories/123456-category-name` | Open the category you want to migrate and copy the browser URL |
+| Zendesk email             | `you@company.com`                                                      | Your normal Zendesk login email                                |
+| Zendesk API token         | secret                                                                 | A Zendesk admin creates it; instructions below                 |
+| Confluence base URL       | `https://company.atlassian.net`                                        | Your normal Confluence URL                                     |
+| Confluence email          | `you@company.com`                                                      | Your normal Atlassian/Confluence account email                 |
+| Confluence API token      | secret                                                                 | You normally create this yourself; instructions below          |
+| Confluence space key      | `OPS`                                                                  | Visible in the target space URL                                |
+| Confluence parent page ID | `123456789`                                                            | Visible in the target page URL                                 |
 
 For the simplest one-off migration, the authentication used by this repo is:
 

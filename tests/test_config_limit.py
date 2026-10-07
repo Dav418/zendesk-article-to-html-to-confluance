@@ -26,6 +26,19 @@ def test_article_limit_reads_a_positive_integer(monkeypatch, tmp_path):
     assert config.export.article_limit == 5
 
 
+def test_blank_email_names_that_line(monkeypatch, tmp_path):
+    _zendesk_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("ZENDESK_EMAIL", "")
+    try:
+        AppConfig.from_environment(require_confluence=False)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected the blank email to be rejected")
+    assert "ZENDESK_EMAIL is empty" in message
+    assert "ZENDESK_API_TOKEN" not in message
+
+
 def test_article_limit_rejects_zero(monkeypatch, tmp_path):
     _zendesk_env(monkeypatch, tmp_path)
     monkeypatch.setenv("ARTICLE_LIMIT", "0")

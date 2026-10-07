@@ -29,8 +29,21 @@ def _parse_bool(value: str | None, default: bool) -> bool:
 def _required(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
-        raise ValueError(f"{name} is required in .env")
+        raise ValueError(f"{name} is empty in .env.")
     return value
+
+
+def _require_login(*, email_name: str, email_hint: str, token_name: str, token_hint: str, oauth_name: str) -> None:
+    """Fail with the exact empty lines when email+token login is incomplete."""
+    if os.getenv(oauth_name, "").strip():
+        return
+    missing: list[str] = []
+    if not os.getenv(email_name, "").strip():
+        missing.append(f"{email_name} is empty. {email_hint}")
+    if not os.getenv(token_name, "").strip():
+        missing.append(f"{token_name} is empty. {token_hint}")
+    if missing:
+        raise ValueError("\n".join(missing))
 
 
 def _optional_positive_int(name: str) -> int | None:
@@ -109,10 +122,13 @@ class AppConfig:
         zendesk_oauth = os.getenv("ZENDESK_OAUTH_TOKEN", "").strip() or None
         zendesk_email = os.getenv("ZENDESK_EMAIL", "").strip() or None
         zendesk_api_token = os.getenv("ZENDESK_API_TOKEN", "").strip() or None
-        if require_zendesk_auth and not zendesk_oauth and not (zendesk_email and zendesk_api_token):
-            raise ValueError(
-                "Configure either ZENDESK_OAUTH_TOKEN, or both ZENDESK_EMAIL and "
-                "ZENDESK_API_TOKEN in .env"
+        if require_zendesk_auth:
+            _require_login(
+                email_name="ZENDESK_EMAIL",
+                email_hint="Put your Zendesk login email on that line.",
+                token_name="ZENDESK_API_TOKEN",
+                token_hint="Put the Zendesk API token on that line.",
+                oauth_name="ZENDESK_OAUTH_TOKEN",
             )
 
         timeout_raw = os.getenv("REQUEST_TIMEOUT_SECONDS", "30").strip()
@@ -158,11 +174,13 @@ class AppConfig:
             confluence_oauth = os.getenv("CONFLUENCE_OAUTH_TOKEN", "").strip() or None
             confluence_email = os.getenv("CONFLUENCE_EMAIL", "").strip() or None
             confluence_api_token = os.getenv("CONFLUENCE_API_TOKEN", "").strip() or None
-            if not confluence_oauth and not (confluence_email and confluence_api_token):
-                raise ValueError(
-                    "Configure either CONFLUENCE_OAUTH_TOKEN, or both CONFLUENCE_EMAIL "
-                    "and CONFLUENCE_API_TOKEN in .env"
-                )
+            _require_login(
+                email_name="CONFLUENCE_EMAIL",
+                email_hint="Put the email you use to log in to Confluence on that line.",
+                token_name="CONFLUENCE_API_TOKEN",
+                token_hint="Put the Atlassian API token on that line.",
+                oauth_name="CONFLUENCE_OAUTH_TOKEN",
+            )
 
             title_policy = os.getenv("CONFLUENCE_EXISTING_TITLE_POLICY", "fail").strip().lower()
             if title_policy not in {"fail", "suffix"}:
