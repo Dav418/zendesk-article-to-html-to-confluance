@@ -906,7 +906,7 @@ Recommended/default:
 CONFLUENCE_EXISTING_TITLE_POLICY=fail
 ```
 
-If a required title already exists elsewhere in the space, preflight fails **before anything is created**.
+If a required title already exists on a live page elsewhere in the space, preflight fails **before anything is created**. An archived or draft page also reserves its title. In that case the new page is given a Zendesk suffix and the upload continues.
 
 If you prefer automatic safe renaming:
 
@@ -942,7 +942,7 @@ output/zendesk-category-123456/confluence-upload-state.json
 
 It records the Confluence page IDs, titles and URLs created by this migration. It contains **no API tokens**.
 
-Do not casually delete this file after a partial upload. It is what lets a rerun continue using already-created pages instead of creating another copy of everything.
+Do not delete this file after a partial upload. It is what lets a rerun continue using already-created pages instead of creating another copy of everything. If you change the Confluence space, the parent page, or whether the category page is created, the next run removes this file itself and starts a new upload. Pages already created in Confluence are left where they are.
 
 On rerun, the tool also checks that pages recorded in state still exist and have not been manually renamed. If they have changed, it stops rather than blindly overwriting that manual change.
 

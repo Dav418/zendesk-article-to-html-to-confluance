@@ -95,6 +95,31 @@ class ConfluenceClient:
         )
 
     def list_pages_in_space(self, space_key: str) -> list[dict[str, Any]]:
+        # An archived or draft page still reserves its title. Confluence rejects a new
+        # page with that title, so those pages have to be included in the conflict check.
+        pages: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for status in ("current", "archived", "draft"):
+            try:
+                found = self._list_pages(space_key, status=status)
+            except RuntimeError as exc:
+                if status != "current" and "403" in str(exc):
+                    logging.warning(
+                        "Confluence did not allow listing %s pages. Continuing without them.",
+                        status,
+                    )
+                    continue
+                raise
+            for page in found:
+                page_id = str(page.get("id") or "")
+                if page_id and page_id in seen:
+                    continue
+                if page_id:
+                    seen.add(page_id)
+                pages.append(page)
+        return pages
+
+    def _list_pages(self, space_key: str, *, status: str) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         start = 0
         limit = 100
@@ -105,7 +130,7 @@ class ConfluenceClient:
                 params={
                     "spaceKey": space_key,
                     "type": "page",
-                    "status": "current",
+                    "status": status,
                     "limit": limit,
                     "start": start,
                 },

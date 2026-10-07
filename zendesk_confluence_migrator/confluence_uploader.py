@@ -115,17 +115,20 @@ class ConfluenceUploader:
             )
 
         state = self._load_state_if_present()
-        if state:
-            self._validate_state_target(state)
 
         pages = self._client.list_pages_in_space(self._settings.space_key)
         pages_by_id = {str(page.get("id")): page for page in pages if page.get("id") is not None}
         own_ids = self._state_page_ids(state)
-        external_titles: set[str] = {
-            str(page.get("title") or "").casefold()
-            for page in pages
-            if page.get("id") is not None and str(page.get("id")) not in own_ids
-        }
+        # A current page wins when the same title is also archived or draft.
+        external_status: dict[str, str] = {}
+        for page in pages:
+            if page.get("id") is None or str(page.get("id")) in own_ids:
+                continue
+            folded = str(page.get("title") or "").casefold()
+            status = str(page.get("status") or "current")
+            if folded not in external_status or status == "current":
+                external_status[folded] = status
+        external_titles = set(external_status)
 
         if state:
             self._validate_state_pages(state, pages_by_id)
@@ -205,7 +208,7 @@ class ConfluenceUploader:
             if state and state.root:
                 root_title = state.root.title
                 used_planned.add(root_title.casefold())
-            elif state and state.planned_root_title:
+            elif state and state.planned_root_title and state.planned_root_title.casefold() not in external_titles:
                 root_title = state.planned_root_title
                 used_planned.add(root_title.casefold())
             else:
@@ -214,8 +217,10 @@ class ConfluenceUploader:
                     base=base,
                     suffix_hint=f"category-{self._manifest.category_id}",
                     external_titles=external_titles,
+                    external_status=external_status,
                     used_planned=used_planned,
                     title_conflicts=title_conflicts,
+                    warnings=warnings,
                     entity="category root",
                 )
 
@@ -228,18 +233,23 @@ class ConfluenceUploader:
                 if title.casefold() in used_planned:
                     raise RuntimeError(f"Upload state contains duplicate planned title: {title}")
                 used_planned.add(title.casefold())
-            elif state and section.id in state.planned_section_titles:
+            elif (
+                state
+                and section.id in state.planned_section_titles
+                and state.planned_section_titles[section.id].casefold() not in external_titles
+                and state.planned_section_titles[section.id].casefold() not in used_planned
+            ):
                 title = state.planned_section_titles[section.id]
-                if title.casefold() in used_planned:
-                    raise RuntimeError(f"Upload state contains duplicate planned title: {title}")
                 used_planned.add(title.casefold())
             else:
                 title = self._plan_title(
                     base=section.name,
                     suffix_hint=f"section-{section.id}",
                     external_titles=external_titles,
+                    external_status=external_status,
                     used_planned=used_planned,
                     title_conflicts=title_conflicts,
+                    warnings=warnings,
                     entity=f"section {section.id}",
                 )
             section_titles[section.id] = title
@@ -251,18 +261,23 @@ class ConfluenceUploader:
                 if title.casefold() in used_planned:
                     raise RuntimeError(f"Upload state contains duplicate planned title: {title}")
                 used_planned.add(title.casefold())
-            elif state and article.id in state.planned_article_titles:
+            elif (
+                state
+                and article.id in state.planned_article_titles
+                and state.planned_article_titles[article.id].casefold() not in external_titles
+                and state.planned_article_titles[article.id].casefold() not in used_planned
+            ):
                 title = state.planned_article_titles[article.id]
-                if title.casefold() in used_planned:
-                    raise RuntimeError(f"Upload state contains duplicate planned title: {title}")
                 used_planned.add(title.casefold())
             else:
                 title = self._plan_title(
                     base=article.title,
                     suffix_hint=f"article-{article.id}",
                     external_titles=external_titles,
+                    external_status=external_status,
                     used_planned=used_planned,
                     title_conflicts=title_conflicts,
+                    warnings=warnings,
                     entity=f"article {article.id}",
                 )
             article_titles[article.id] = title
@@ -314,24 +329,30 @@ class ConfluenceUploader:
             )
             state.save(self._state_path)
         else:
-            self._validate_state_target(state)
             state.planned_root_title = plan.root_title
             state.planned_section_titles.update(plan.section_titles)
             state.planned_article_titles.update(plan.article_titles)
             state.save(self._state_path)
+
+        reserved_titles = {title.casefold() for title in plan.section_titles.values()}
+        reserved_titles.update(title.casefold() for title in plan.article_titles.values())
+        if plan.root_title:
+            reserved_titles.add(plan.root_title.casefold())
 
         root_parent_id = self._settings.parent_page_id
         category_url: str
         if self._settings.create_category_root:
             if state.root is None:
                 logging.info("Creating category root page: %s", plan.root_title)
-                page = self._client.create_page(
-                    space_key=self._settings.space_key,
+                page, root_title = self._create_page(
                     title=plan.root_title or self._manifest.category_name,
+                    suffix_hint=f"category-{self._manifest.category_id}",
+                    reserved_titles=reserved_titles,
                     parent_page_id=self._settings.parent_page_id,
                     body_storage=self._placeholder("Zendesk category", self._manifest.category_id),
                 )
-                state.root = self._page_state(page, plan.root_title or self._manifest.category_name)
+                state.root = self._page_state(page, root_title)
+                state.planned_root_title = root_title
                 state.save(self._state_path)
             root_parent_id = state.root.page_id
             category_url = state.root.url
@@ -349,13 +370,15 @@ class ConfluenceUploader:
             if section.parent_section_id is not None and section.parent_section_id in state.sections:
                 parent_page_id = state.sections[section.parent_section_id].page_id
             logging.info("Creating section page: %s", plan.section_titles[section.id])
-            page = self._client.create_page(
-                space_key=self._settings.space_key,
+            page, section_title = self._create_page(
                 title=plan.section_titles[section.id],
+                suffix_hint=f"section-{section.id}",
+                reserved_titles=reserved_titles,
                 parent_page_id=parent_page_id,
                 body_storage=self._placeholder("Zendesk section", section.id),
             )
-            state.sections[section.id] = self._page_state(page, plan.section_titles[section.id])
+            state.sections[section.id] = self._page_state(page, section_title)
+            state.planned_section_titles[section.id] = section_title
             state.save(self._state_path)
 
         upload_articles = self._upload_articles(plan.upload_article_ids)
@@ -366,13 +389,15 @@ class ConfluenceUploader:
             if article.section_id is not None and article.section_id in state.sections:
                 parent_page_id = state.sections[article.section_id].page_id
             logging.info("Creating article page: %s", plan.article_titles[article.id])
-            page = self._client.create_page(
-                space_key=self._settings.space_key,
+            page, article_title = self._create_page(
                 title=plan.article_titles[article.id],
+                suffix_hint=f"article-{article.id}",
+                reserved_titles=reserved_titles,
                 parent_page_id=parent_page_id,
                 body_storage=self._placeholder("Zendesk article", article.id),
             )
-            state.articles[article.id] = self._page_state(page, plan.article_titles[article.id])
+            state.articles[article.id] = self._page_state(page, article_title)
+            state.planned_article_titles[article.id] = article_title
             state.save(self._state_path)
 
         article_urls = {article_id: page.url for article_id, page in state.articles.items()}
@@ -531,21 +556,70 @@ class ConfluenceUploader:
         if self._settings.create_category_root and state.root:
             print(f"Migration root:         {state.root.url}")
 
+    def _create_page(
+        self,
+        *,
+        title: str,
+        suffix_hint: str,
+        reserved_titles: set[str],
+        parent_page_id: str,
+        body_storage: str,
+    ) -> tuple[dict[str, Any], str]:
+        try:
+            page = self._client.create_page(
+                space_key=self._settings.space_key,
+                title=title,
+                parent_page_id=parent_page_id,
+                body_storage=body_storage,
+            )
+            return page, title
+        except RuntimeError as exc:
+            if "same TITLE" not in str(exc):
+                raise
+        reserved_titles.add(title.casefold())
+        renamed = unique_title(title, suffix_hint=suffix_hint, used_casefolded=reserved_titles)
+        logging.warning(
+            "Confluence already has a page titled %r. Creating %r instead.",
+            title,
+            renamed,
+        )
+        page = self._client.create_page(
+            space_key=self._settings.space_key,
+            title=renamed,
+            parent_page_id=parent_page_id,
+            body_storage=body_storage,
+        )
+        return page, renamed
+
     def _plan_title(
         self,
         *,
         base: str,
         suffix_hint: str,
         external_titles: set[str],
+        external_status: dict[str, str],
         used_planned: set[str],
         title_conflicts: list[dict[str, str]],
+        warnings: list[str],
         entity: str,
     ) -> str:
         base = bounded_title(base, fallback=f"Zendesk {suffix_hint}")
         folded = base.casefold()
+        status = external_status.get(folded)
         if folded not in external_titles and folded not in used_planned:
             used_planned.add(folded)
             return base
+
+        if status in {"archived", "draft"} and folded not in used_planned:
+            combined = set(external_titles) | set(used_planned)
+            title = unique_title(base, suffix_hint=suffix_hint, used_casefolded=combined)
+            used_planned.add(folded)
+            used_planned.add(title.casefold())
+            warnings.append(
+                f"{base} is already used by an {status} page in this space. "
+                f"The new page will be named {title}."
+            )
+            return title
 
         if folded in used_planned:
             return unique_title(base, suffix_hint=suffix_hint, used_casefolded=used_planned)
@@ -637,9 +711,22 @@ class ConfluenceUploader:
         )
 
     def _load_state_if_present(self) -> UploadState | None:
-        return UploadState.load(self._state_path) if self._state_path.exists() else None
+        if not self._state_path.is_file():
+            return None
+        state = UploadState.load(self._state_path)
+        if self._state_matches_target(state):
+            return state
+        self._state_path.unlink()
+        continue_flag = self._workspace_dir / "continue-upload.txt"
+        if continue_flag.is_file():
+            continue_flag.unlink()
+        print()
+        print("The last upload used a different Confluence page or space.")
+        print("That record was removed, so this run starts a new upload.")
+        print("Pages from the previous upload are still in Confluence. Delete them there if you do not want them.")
+        return None
 
-    def _validate_state_target(self, state: UploadState) -> None:
+    def _state_matches_target(self, state: UploadState) -> bool:
         expected = (
             self._manifest.category_id,
             self._settings.base_url,
@@ -654,11 +741,7 @@ class ConfluenceUploader:
             state.configured_parent_page_id,
             state.create_category_root,
         )
-        if actual != expected:
-            raise RuntimeError(
-                "confluence-upload-state.json belongs to a different source/target configuration. "
-                "Do not delete it if pages were already created; review the state before proceeding."
-            )
+        return actual == expected
 
     def _state_page_ids(self, state: UploadState | None) -> set[str]:
         if state is None:

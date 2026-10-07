@@ -327,6 +327,71 @@ def test_later_batch_updates_links_in_earlier_articles_without_reuploading_files
     assert client.attachments == [first_page_id]
 
 
+def test_state_for_a_different_parent_page_is_removed(tmp_path: Path):
+    state = UploadState(
+        schema_version=1,
+        category_id=100,
+        confluence_base_url="https://company.atlassian.net",
+        confluence_space_key="OPS",
+        configured_parent_page_id="999",
+        create_category_root=True,
+        articles={
+            1: ConfluencePageState(
+                page_id="99",
+                title="Shared",
+                url="https://company.atlassian.net/wiki/pages/99",
+            )
+        },
+    )
+    state.save(tmp_path / "confluence-upload-state.json")
+    (tmp_path / "continue-upload.txt").write_text("yes\n", encoding="utf-8")
+
+    plan = _uploader(tmp_path).preflight(article_limit=1)
+
+    assert plan.valid
+    assert plan.article_titles[2] == "Shared"
+    assert not (tmp_path / "confluence-upload-state.json").exists()
+    assert not (tmp_path / "continue-upload.txt").exists()
+
+
+def test_archived_page_title_is_renamed_and_a_live_page_still_fails(tmp_path: Path):
+    archived = _FakeConfluence(
+        pages=[
+            {"id": "1", "title": "Parent", "status": "current"},
+            {"id": "50", "title": "Knowledge", "status": "archived"},
+        ]
+    )
+    state = UploadState(
+        schema_version=1,
+        category_id=100,
+        confluence_base_url="https://company.atlassian.net",
+        confluence_space_key="OPS",
+        configured_parent_page_id="1",
+        create_category_root=True,
+        planned_root_title="Knowledge",
+    )
+    state.save(tmp_path / "confluence-upload-state.json")
+
+    plan = _uploader(tmp_path, archived).preflight()
+
+    assert plan.valid
+    assert plan.root_title == "Knowledge (Zendesk category-100)"
+    assert any("archived page" in warning for warning in plan.warnings)
+
+    live_dir = tmp_path / "live"
+    live_dir.mkdir()
+    live = _FakeConfluence(
+        pages=[
+            {"id": "1", "title": "Parent", "status": "current"},
+            {"id": "50", "title": "Knowledge", "status": "current"},
+        ]
+    )
+    blocked = _uploader(live_dir, live).preflight()
+
+    assert not blocked.valid
+    assert blocked.title_conflicts[0]["title"] == "Knowledge"
+
+
 def test_preflight_without_a_limit_includes_every_uploadable_article(tmp_path: Path):
     plan = _uploader(tmp_path).preflight()
 
