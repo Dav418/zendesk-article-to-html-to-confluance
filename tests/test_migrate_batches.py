@@ -7,13 +7,15 @@ from pathlib import Path
 
 _ENV_KEYS = (
     "ZENDESK_CATEGORY_URL",
-    "ZENDESK_OAUTH_TOKEN",
+    "ZENDESK_OAUTH_CLIENT_ID",
+    "ZENDESK_OAUTH_CLIENT_SECRET",
     "ZENDESK_EMAIL",
     "ZENDESK_API_TOKEN",
     "CONFLUENCE_BASE_URL",
-    "CONFLUENCE_OAUTH_TOKEN",
     "CONFLUENCE_EMAIL",
     "CONFLUENCE_API_TOKEN",
+    "CONFLUENCE_OAUTH_CLIENT_ID",
+    "CONFLUENCE_OAUTH_CLIENT_SECRET",
     "CONFLUENCE_SPACE_KEY",
     "CONFLUENCE_PARENT_PAGE_ID",
     "ARTICLE_LIMIT",
@@ -86,6 +88,53 @@ def test_env_problems_lists_every_empty_line(monkeypatch):
         "CONFLUENCE_API_TOKEN",
     ]
     assert "example value" in problems[3]
+
+
+def test_one_finished_login_does_not_require_the_other(monkeypatch):
+    for key in _ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ZENDESK_CATEGORY_URL", "https://acme.zendesk.com/hc/en-gb/categories/999-help")
+    monkeypatch.setenv("ZENDESK_EMAIL", "person@acme.com")
+    monkeypatch.setenv("ZENDESK_API_TOKEN", "zendesk-token")
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://acme.atlassian.net")
+    monkeypatch.setenv("CONFLUENCE_OAUTH_CLIENT_ID", "confluence-client")
+    monkeypatch.setenv("CONFLUENCE_OAUTH_CLIENT_SECRET", "confluence-secret")
+    monkeypatch.setenv("CONFLUENCE_SPACE_KEY", "OPS")
+    monkeypatch.setenv("CONFLUENCE_PARENT_PAGE_ID", "555")
+
+    assert env_problems(require_confluence=True) == []
+
+
+def test_oauth_client_credentials_replace_the_email_login(monkeypatch):
+    for key in _ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ZENDESK_CATEGORY_URL", "https://acme.zendesk.com/hc/en-gb/categories/999-help")
+    monkeypatch.setenv("ZENDESK_OAUTH_CLIENT_ID", "migration-client")
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://acme.atlassian.net")
+    monkeypatch.setenv("CONFLUENCE_EMAIL", "person@acme.com")
+    monkeypatch.setenv("CONFLUENCE_API_TOKEN", "atlas-token")
+    monkeypatch.setenv("CONFLUENCE_SPACE_KEY", "OPS")
+    monkeypatch.setenv("CONFLUENCE_PARENT_PAGE_ID", "555")
+
+    names = [problem.split(" ", 1)[0] for problem in env_problems(require_confluence=True)]
+
+    assert names == ["ZENDESK_OAUTH_CLIENT_SECRET"]
+
+
+def test_confluence_oauth_client_replaces_the_email_login(monkeypatch):
+    for key in _ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ZENDESK_CATEGORY_URL", "https://acme.zendesk.com/hc/en-gb/categories/999-help")
+    monkeypatch.setenv("ZENDESK_EMAIL", "person@acme.com")
+    monkeypatch.setenv("ZENDESK_API_TOKEN", "zendesk-token")
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://acme.atlassian.net")
+    monkeypatch.setenv("CONFLUENCE_OAUTH_CLIENT_ID", "confluence-client")
+    monkeypatch.setenv("CONFLUENCE_SPACE_KEY", "OPS")
+    monkeypatch.setenv("CONFLUENCE_PARENT_PAGE_ID", "555")
+
+    names = [problem.split(" ", 1)[0] for problem in env_problems(require_confluence=True)]
+
+    assert names == ["CONFLUENCE_OAUTH_CLIENT_SECRET"]
 
 
 def test_placeholder_problems_accepts_real_values():

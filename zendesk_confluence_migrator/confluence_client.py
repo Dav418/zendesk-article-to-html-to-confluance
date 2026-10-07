@@ -52,6 +52,10 @@ class ConfluenceClient:
         self._settings = settings
         self._export_settings = export_settings
         self._wiki_base = f"{settings.base_url}/wiki"
+        self._api_base = self._wiki_base
+        self._login_description = "CONFLUENCE_EMAIL and CONFLUENCE_API_TOKEN"
+        self._uses_client_credentials = bool(settings.oauth_client_id and settings.oauth_client_secret)
+        self._token_deadline = 0.0
         self._session = requests.Session()
         retry = Retry(
             total=5,
@@ -72,7 +76,10 @@ class ConfluenceClient:
                 "User-Agent": "zendesk-confluence-migrator/2.0",
             }
         )
-        if settings.oauth_token:
+        if self._uses_client_credentials:
+            self._login_description = "CONFLUENCE_OAUTH_CLIENT_ID and CONFLUENCE_OAUTH_CLIENT_SECRET"
+            self._api_base = self._service_account_api_base()
+        elif settings.oauth_token:
             self._session.headers["Authorization"] = f"Bearer {settings.oauth_token}"
         else:
             assert settings.email is not None
@@ -170,10 +177,12 @@ class ConfluenceClient:
         return self._request_json("PUT", f"/rest/api/content/{page_id}", json=payload)
 
     def upload_attachment(self, *, page_id: str, file_path: Path) -> dict[str, Any]:
-        url = f"{self._wiki_base}/rest/api/content/{page_id}/child/attachment"
+        url = f"{self._api_base}/rest/api/content/{page_id}/child/attachment"
         operation = f"upload attachment {file_path.name}"
         response: requests.Response | None = None
+        refreshed = False
         for attempt in range(_MAX_RATE_LIMIT_ATTEMPTS):
+            self._ensure_access_token()
             with file_path.open("rb") as handle:
                 response = self._session.put(
                     url,
@@ -185,6 +194,10 @@ class ConfluenceClient:
                     },
                     timeout=self._export_settings.request_timeout_seconds,
                 )
+            if response.status_code == 401 and self._uses_client_credentials and not refreshed:
+                self._token_deadline = 0.0
+                refreshed = True
+                continue
             if self._wait_for_rate_limit(response, attempt, operation):
                 continue
             break
@@ -217,15 +230,21 @@ class ConfluenceClient:
     ) -> dict[str, Any]:
         operation = f"{method} {path}"
         response: requests.Response | None = None
+        refreshed = False
         for attempt in range(_MAX_RATE_LIMIT_ATTEMPTS):
+            self._ensure_access_token()
             response = self._session.request(
                 method,
-                f"{self._wiki_base}{path}",
+                f"{self._api_base}{path}",
                 params=params,
                 json=json,
                 headers={"Content-Type": "application/json"} if json is not None else None,
                 timeout=self._export_settings.request_timeout_seconds,
             )
+            if response.status_code == 401 and self._uses_client_credentials and not refreshed:
+                self._token_deadline = 0.0
+                refreshed = True
+                continue
             if self._wait_for_rate_limit(response, attempt, operation):
                 continue
             break
@@ -236,6 +255,60 @@ class ConfluenceClient:
         if not isinstance(payload, dict):
             raise RuntimeError("Confluence returned a non-object JSON response")
         return payload
+
+    def _service_account_api_base(self) -> str:
+        response = requests.get(
+            f"{self._settings.base_url}/_edge/tenant_info",
+            timeout=self._export_settings.request_timeout_seconds,
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        cloud_id = payload.get("cloudId") if isinstance(payload, dict) else None
+        if response.status_code != 200 or not isinstance(cloud_id, str) or not cloud_id.strip():
+            raise RuntimeError(
+                "Confluence did not return a cloud ID for "
+                f"{self._settings.base_url}. Check CONFLUENCE_BASE_URL."
+            )
+        return f"https://api.atlassian.com/ex/confluence/{cloud_id}/wiki"
+
+    def _ensure_access_token(self) -> None:
+        if not self._uses_client_credentials or time.monotonic() < self._token_deadline:
+            return
+        client_id = self._settings.oauth_client_id
+        client_secret = self._settings.oauth_client_secret
+        assert client_id is not None and client_secret is not None
+        logging.info("Asking Confluence for an access token using the OAuth client ID and secret.")
+        response = requests.post(
+            "https://auth.atlassian.com/oauth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            headers={"Accept": "application/json"},
+            timeout=self._export_settings.request_timeout_seconds,
+        )
+        try:
+            parsed = response.json()
+        except ValueError:
+            parsed = None
+        payload = parsed if isinstance(parsed, dict) else {}
+        if response.status_code != 200:
+            detail = payload.get("error_description") or payload.get("error") or "no details"
+            raise RuntimeError(
+                "Confluence refused the OAuth client ID and secret "
+                f"(HTTP {response.status_code}: {detail}). "
+                "Check CONFLUENCE_OAUTH_CLIENT_ID and CONFLUENCE_OAUTH_CLIENT_SECRET."
+            )
+        token = payload.get("access_token")
+        if not isinstance(token, str) or not token.strip():
+            raise RuntimeError("Confluence did not return an access token for the OAuth client.")
+        expires_in = payload.get("expires_in")
+        lifetime = expires_in if isinstance(expires_in, int) and expires_in > 0 else 3600
+        self._session.headers["Authorization"] = f"Bearer {token}"
+        self._token_deadline = time.monotonic() + max(30, lifetime - 120)
 
     def _wait_for_rate_limit(
         self,
@@ -286,8 +359,8 @@ class ConfluenceClient:
             )
         if response.status_code == 401:
             raise RuntimeError(
-                "Confluence returned 401 Unauthorized. Check the Confluence API/OAuth token "
-                "and email."
+                "Confluence returned 401 Unauthorized. "
+                f"The login used was {self._login_description}."
             )
         if response.status_code == 403:
             raise RuntimeError(

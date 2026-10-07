@@ -16,8 +16,14 @@ _ZENDESK_SETTINGS = (
     ("ZENDESK_CATEGORY_URL", "Paste the browser address of the Zendesk category."),
 )
 _ZENDESK_LOGIN = (
-    ("ZENDESK_EMAIL", "Put your Zendesk login email there."),
-    ("ZENDESK_API_TOKEN", "Paste the Zendesk API token there."),
+    (
+        "ZENDESK_EMAIL",
+        "Put your Zendesk login email there. Leave the two OAuth client lines blank when you use this login.",
+    ),
+    (
+        "ZENDESK_API_TOKEN",
+        "Paste the Zendesk API token there. Only one Zendesk login is needed, not both.",
+    ),
 )
 _CONFLUENCE_SETTINGS = (
     ("CONFLUENCE_BASE_URL", "Put your Confluence site address there, like https://company.atlassian.net"),
@@ -25,38 +31,80 @@ _CONFLUENCE_SETTINGS = (
     ("CONFLUENCE_PARENT_PAGE_ID", "Put the number of the page to upload under there."),
 )
 _CONFLUENCE_LOGIN = (
-    ("CONFLUENCE_EMAIL", "Put the email you use to log in to Confluence there."),
-    ("CONFLUENCE_API_TOKEN", "Paste the Atlassian API token there."),
+    (
+        "CONFLUENCE_EMAIL",
+        "Put the email you use to log in to Confluence there. Leave the two OAuth client lines blank when you use this login.",
+    ),
+    (
+        "CONFLUENCE_API_TOKEN",
+        "Paste the Atlassian API token there. Only one Confluence login is needed, not both.",
+    ),
 )
 _EXAMPLE_VALUES = {
     "ZENDESK_CATEGORY_URL": ("123456-category-name", "//company.zendesk.com"),
     "ZENDESK_EMAIL": ("you@company.com",),
     "ZENDESK_API_TOKEN": ("PASTE_",),
-    "ZENDESK_OAUTH_TOKEN": ("PASTE_",),
     "CONFLUENCE_BASE_URL": ("//company.atlassian.net",),
     "CONFLUENCE_EMAIL": ("you@company.com",),
     "CONFLUENCE_API_TOKEN": ("PASTE_",),
-    "CONFLUENCE_OAUTH_TOKEN": ("PASTE_",),
     "CONFLUENCE_PARENT_PAGE_ID": ("123456789",),
 }
 
 
 def env_problems(*, require_confluence: bool) -> list[str]:
     """List every needed .env line that is empty or still has the example value."""
-    groups = [(_ZENDESK_SETTINGS, None), (_ZENDESK_LOGIN, "ZENDESK_OAUTH_TOKEN")]
+    problems = _setting_problems(_ZENDESK_SETTINGS)
+    problems.extend(_zendesk_login_problems())
     if require_confluence:
-        groups += [(_CONFLUENCE_SETTINGS, None), (_CONFLUENCE_LOGIN, "CONFLUENCE_OAUTH_TOKEN")]
+        problems.extend(_setting_problems(_CONFLUENCE_SETTINGS))
+        problems.extend(_confluence_login_problems())
+    return problems
 
+
+def _confluence_login_problems() -> list[str]:
+    """OAuth client ID + secret, or email + API token."""
+    if _value("CONFLUENCE_OAUTH_CLIENT_ID") or _value("CONFLUENCE_OAUTH_CLIENT_SECRET"):
+        return _setting_problems(
+            (
+                (
+                    "CONFLUENCE_OAUTH_CLIENT_ID",
+                    "Put the OAuth client ID there. Leave the email and API token blank when you use this login.",
+                ),
+                (
+                    "CONFLUENCE_OAUTH_CLIENT_SECRET",
+                    "Put the OAuth client secret there. Only one Confluence login is needed, not both.",
+                ),
+            )
+        )
+    return _setting_problems(_CONFLUENCE_LOGIN)
+
+
+def _zendesk_login_problems() -> list[str]:
+    """OAuth client Identifier + Secret, or email + API token."""
+    if _value("ZENDESK_OAUTH_CLIENT_ID") or _value("ZENDESK_OAUTH_CLIENT_SECRET"):
+        return _setting_problems(
+            (
+                (
+                    "ZENDESK_OAUTH_CLIENT_ID",
+                    "Put the OAuth client Identifier there. Leave the email and API token blank when you use this login.",
+                ),
+                (
+                    "ZENDESK_OAUTH_CLIENT_SECRET",
+                    "Put the OAuth client Secret there. Only one Zendesk login is needed, not both.",
+                ),
+            )
+        )
+    return _setting_problems(_ZENDESK_LOGIN)
+
+
+def _setting_problems(settings: tuple[tuple[str, str], ...]) -> list[str]:
     problems: list[str] = []
-    for settings, oauth_name in groups:
-        if oauth_name and _value(oauth_name):
-            settings = ((oauth_name, "Paste the OAuth token there."),)
-        for name, hint in settings:
-            value = _value(name)
-            if not value:
-                problems.append(f"{name} is empty. {hint}")
-            elif _is_example(name, value):
-                problems.append(f"{name} still has the example value. {hint}")
+    for name, hint in settings:
+        value = _value(name)
+        if not value:
+            problems.append(f"{name} is empty. {hint}")
+        elif _is_example(name, value):
+            problems.append(f"{name} still has the example value. {hint}")
     return problems
 
 
@@ -109,7 +157,9 @@ def explain_env_file(env_path: Path, *, retry_hint: str) -> None:
     """Tell the person where .env is and open it. The name starts with a dot, so Finder hides it."""
     print()
     print("The migration cannot start until .env has your real Zendesk and Confluence values.")
-    print("Example text such as PASTE_ZENDESK_TOKEN_HERE or an empty file is not enough.")
+    print("Zendesk needs one login, and Confluence needs one login.")
+    print("For each, fill in either the email and API token, or the OAuth client ID and secret.")
+    print("Leave the other login blank. Example text such as PASTE_ZENDESK_TOKEN_HERE is not enough.")
     print(f"The file is here:\n  {env_path}")
     print("It is in the same folder as start.command and start.bat. It is not inside .venv.")
     print()
@@ -152,21 +202,21 @@ def placeholder_problems(config: AppConfig) -> list[str]:
     if confluence is None:
         return ["Confluence settings are missing from .env"]
 
+    uses_client_credentials = bool(
+        config.zendesk.oauth_client_id and config.zendesk.oauth_client_secret
+    )
     if "123456-category-name" in config.zendesk.category_url:
         problems.append("ZENDESK_CATEGORY_URL is still the example. Paste your category URL.")
-    if not config.zendesk.oauth_token and config.zendesk.email == "you@company.com":
+    if not uses_client_credentials and config.zendesk.email == "you@company.com":
         problems.append("ZENDESK_EMAIL is still you@company.com.")
-    if not config.zendesk.oauth_token and _is_placeholder(config.zendesk.api_token):
+    if not uses_client_credentials and _is_placeholder(config.zendesk.api_token):
         problems.append("ZENDESK_API_TOKEN is still the example. Paste the Zendesk token.")
-    if _is_placeholder(config.zendesk.oauth_token):
-        problems.append("ZENDESK_OAUTH_TOKEN is still the example.")
 
-    if not confluence.oauth_token and confluence.email == "you@company.com":
+    uses_confluence_client = bool(confluence.oauth_client_id and confluence.oauth_client_secret)
+    if not uses_confluence_client and confluence.email == "you@company.com":
         problems.append("CONFLUENCE_EMAIL is still you@company.com.")
-    if not confluence.oauth_token and _is_placeholder(confluence.api_token):
+    if not uses_confluence_client and _is_placeholder(confluence.api_token):
         problems.append("CONFLUENCE_API_TOKEN is still the example. Paste the Atlassian token.")
-    if _is_placeholder(confluence.oauth_token):
-        problems.append("CONFLUENCE_OAUTH_TOKEN is still the example.")
     if confluence.parent_page_id == "123456789":
         problems.append("CONFLUENCE_PARENT_PAGE_ID is still 123456789. Paste the real page ID.")
     return problems
@@ -198,8 +248,8 @@ def load_checked_config(
             return None
         else:
             print(".env is empty. Fill in your Zendesk and Confluence values.")
-        explain_env_file(env_path, retry_hint=retry_hint)
-        return None
+            explain_env_file(env_path, retry_hint=retry_hint)
+            return None
 
     load_dotenv(env_path)
     problems = env_problems(require_confluence=require_confluence)

@@ -39,28 +39,6 @@ fi
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
 
-if [ ! -f ".env" ] || [ ! -s ".env" ]; then
-  if [ -f ".env.example" ]; then
-    cp .env.example .env
-  fi
-  echo
-  echo "A file named .env must be filled in before the migration can run."
-  echo "It was just created in this folder if it was missing or empty:"
-  echo "  $PWD/.env"
-  echo
-  echo "Finder hides this file because the name starts with a dot."
-  echo "  1. Open this folder in Finder, the one that contains start.command."
-  echo "  2. Press Command + Shift + . (the period key). Hidden files appear in grey."
-  echo "  3. Double-click .env. If Mac asks for an app, choose TextEdit."
-  echo "  4. Replace every example value, including PASTE_ZENDESK_TOKEN_HERE."
-  echo "  5. Save, then run start.command again."
-  echo "Do not edit the .venv folder. That is a different hidden item."
-  echo "Press Command + Shift + . again to hide those files when you are finished."
-  open -e ".env" >/dev/null 2>&1 || true
-  read -r -p "Press Enter to close..."
-  exit 1
-fi
-
 .venv/bin/python migrate.py
 status=$?
 echo

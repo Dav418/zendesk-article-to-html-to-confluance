@@ -173,7 +173,7 @@ Zendesk:   your email + a Zendesk API token
 Confluence: your email + an Atlassian API token
 ```
 
-The repo also supports OAuth tokens, but you do **not** need OAuth if the simple token options below are available to you.
+If an admin will not give you an API token, both Zendesk and Confluence can use an OAuth client ID and secret instead. The script fetches the access token itself. See sections 2.4 and 4.7.
 
 ### Keep the secrets secret
 
@@ -298,12 +298,13 @@ Official Zendesk instructions:
 Use **your own normal Zendesk login email**, not the admin's email:
 
 ```env
-ZENDESK_OAUTH_TOKEN=
 ZENDESK_EMAIL=you@company.com
 ZENDESK_API_TOKEN=PASTE_THE_ZENDESK_TOKEN_HERE
+ZENDESK_OAUTH_CLIENT_ID=
+ZENDESK_OAUTH_CLIENT_SECRET=
 ```
 
-Do **not** add `/token` to your email. The script does that internally.
+Do **not** add `/token` to your email. The script does that internally. Leave the two OAuth lines blank when you use email + API token. If `ZENDESK_OAUTH_CLIENT_ID` and `ZENDESK_OAUTH_CLIENT_SECRET` are both filled in, those are used instead and the email and API token are ignored.
 
 Why is the email needed? A Zendesk API token is account-level rather than belonging to one user. Your email identifies which verified Zendesk user is making the request, so Zendesk applies that user's permissions.
 
@@ -323,23 +324,24 @@ https://support.zendesk.com/hc/en-us/articles/10840968198042-Announcing-the-remo
 
 ## 2.4 Zendesk OAuth alternative
 
-If your company will not provide an API token, the repo can authenticate using a Zendesk OAuth access token instead:
+If your company will not provide an API token, an admin creates an OAuth client and you put its Identifier and Secret in `.env`. The script asks Zendesk for an access token itself. You do not run a separate command.
+
+1. In Admin Center, open **Apps and integrations → APIs → OAuth clients**.
+2. Click **Add OAuth client**. Name it `Zendesk Confluence migration`. Set **Client kind** to **Confidential**. Leave **Redirect URLs** empty. Allow the **hc:read** scope.
+3. Click **Save**. Copy the **Identifier** and the **Secret**. Zendesk shows the full secret only once.
 
 ```env
-ZENDESK_OAUTH_TOKEN=PASTE_OAUTH_ACCESS_TOKEN_HERE
+ZENDESK_OAUTH_CLIENT_ID=the-identifier
+ZENDESK_OAUTH_CLIENT_SECRET=the-secret
 ZENDESK_EMAIL=
 ZENDESK_API_TOKEN=
 ```
 
-Creating a new Zendesk OAuth token normally requires an admin to create/configure an OAuth client first under:
-
-**Admin Center -> Apps and integrations -> APIs -> OAuth clients**
-
-This is a more involved setup than the temporary API-token route. If your organisation already has an OAuth client/token intended for this API access, use that. Do not reuse unrelated Messaging secrets.
+On export, the script sends those two values to Zendesk and uses the access token Zendesk returns. The token lasts 48 hours, which is the longest Zendesk allows. The email + API token route still works: leave the Identifier and Secret blank and fill in `ZENDESK_EMAIL` and `ZENDESK_API_TOKEN` instead.
 
 Official Zendesk OAuth documentation:
 
-https://support.zendesk.com/hc/en-us/articles/8889508417946-Managing-OAuth-token-access-to-the-API
+https://developer.zendesk.com/documentation/authentication/creating-and-using-oauth-tokens-with-the-api/
 
 ---
 
@@ -459,7 +461,7 @@ Official Atlassian token page/documentation:
 
 Atlassian recommends scoped tokens where possible. Scoped tokens use a different API hostname and require a Confluence Cloud ID. This version of the repo deliberately uses the simpler site-specific Confluence REST URL and therefore expects a **standard/unscoped Atlassian API token** when using email + token authentication.
 
-If your organisation blocks standard API tokens and only permits scoped tokens, do not guess at the configuration. Use the OAuth option supported by the repo or update the client to support Atlassian's scoped-token API URL.
+If your organisation will not allow a standard API token, use the OAuth client ID and secret in section 4.7 instead.
 
 Official Confluence authentication documentation:
 
@@ -528,9 +530,10 @@ The normal setup is:
 ```env
 CONFLUENCE_BASE_URL=https://company.atlassian.net
 
-CONFLUENCE_OAUTH_TOKEN=
 CONFLUENCE_EMAIL=you@company.com
 CONFLUENCE_API_TOKEN=PASTE_THE_ATLASSIAN_TOKEN_HERE
+CONFLUENCE_OAUTH_CLIENT_ID=
+CONFLUENCE_OAUTH_CLIENT_SECRET=
 
 CONFLUENCE_SPACE_KEY=OPS
 CONFLUENCE_PARENT_PAGE_ID=123456789
@@ -542,19 +545,41 @@ CONFLUENCE_UPLOAD_DRAFTS=false
 CONFLUENCE_RESTRICTED_ARTICLE_POLICY=warn
 ```
 
-Leave `CONFLUENCE_ROOT_PAGE_TITLE` blank unless you specifically want the new top-level migration page to have a different name. Blank means: use the real Zendesk category name.
+Leave `CONFLUENCE_ROOT_PAGE_TITLE` blank unless you specifically want the new top-level migration page to have a different name. Blank means: use the real Zendesk category name. Leave the two OAuth lines blank when you use email + API token. If both OAuth lines are filled in, those are used and the email and API token are ignored.
 
-### Confluence OAuth alternative
+## 4.7 Confluence OAuth client
 
-If you already have an appropriate Confluence OAuth bearer token, use:
+This is the same idea as the Zendesk OAuth client. An organisation admin creates it, and the script asks Atlassian for an access token. You do not fetch or paste that token.
+
+1. Open [Atlassian Administration](https://admin.atlassian.com/).
+2. Go to **Directory → Service accounts**.
+3. Open the service account, or create one, then choose **Create credentials → OAuth 2.0**.
+4. Under **Confluence scopes**, select these four scopes:
+
+   - `read:confluence-space.summary` — read the target space;
+   - `read:confluence-content.all` — read the parent and existing pages;
+   - `write:confluence-content` — create and update pages;
+   - `write:confluence-file` — upload attachments.
+
+   The names shown by Atlassian may be friendlier descriptions such as **Read Confluence space summary**, **Read Confluence content**, **Write Confluence content**, and **Upload Confluence attachments**. Do not select delete-space or delete-content permissions; this tool does not need them.
+5. Copy the **client ID** and **client secret**. Atlassian shows the secret only once.
 
 ```env
-CONFLUENCE_OAUTH_TOKEN=PASTE_OAUTH_ACCESS_TOKEN_HERE
+CONFLUENCE_OAUTH_CLIENT_ID=the-client-id
+CONFLUENCE_OAUTH_CLIENT_SECRET=the-client-secret
 CONFLUENCE_EMAIL=
 CONFLUENCE_API_TOKEN=
 ```
 
-For the normal one-off migration, the email + standard Atlassian API token route is simpler.
+The access token lasts about an hour. The script fetches a new one when it is about to expire. To use email + API token instead, leave the client ID and secret blank.
+
+Official Atlassian instructions:
+
+https://support.atlassian.com/user-management/docs/create-oauth-2-0-credential-for-service-accounts/
+
+Official Confluence scope list:
+
+https://developer.atlassian.com/cloud/confluence/scopes-for-oauth-2-3LO-and-forge-apps/
 
 ---
 
@@ -568,9 +593,10 @@ This is what a normal one-off migration configuration looks like. **Replace ever
 # -----------------------------------------------------------------------------
 ZENDESK_CATEGORY_URL=https://company.zendesk.com/hc/en-gb/categories/123456-category-name
 
-ZENDESK_OAUTH_TOKEN=
 ZENDESK_EMAIL=you@company.com
 ZENDESK_API_TOKEN=PASTE_ZENDESK_TOKEN_HERE
+ZENDESK_OAUTH_CLIENT_ID=
+ZENDESK_OAUTH_CLIENT_SECRET=
 
 # -----------------------------------------------------------------------------
 # Local export
@@ -587,9 +613,10 @@ ARTICLE_LIMIT=
 # -----------------------------------------------------------------------------
 CONFLUENCE_BASE_URL=https://company.atlassian.net
 
-CONFLUENCE_OAUTH_TOKEN=
 CONFLUENCE_EMAIL=you@company.com
 CONFLUENCE_API_TOKEN=PASTE_ATLASSIAN_TOKEN_HERE
+CONFLUENCE_OAUTH_CLIENT_ID=
+CONFLUENCE_OAUTH_CLIENT_SECRET=
 
 CONFLUENCE_SPACE_KEY=OPS
 CONFLUENCE_PARENT_PAGE_ID=123456789
@@ -927,7 +954,7 @@ Check:
 - `ZENDESK_API_TOKEN` contains the token and has no accidental spaces;
 - you did not put `/token` onto the email yourself;
 - the token is still active;
-- `ZENDESK_OAUTH_TOKEN` is blank when using email + API token.
+- `ZENDESK_OAUTH_CLIENT_ID` and `ZENDESK_OAUTH_CLIENT_SECRET` are blank when using email + API token. If the Identifier and Secret are filled in, the email and API token are not used.
 
 ## Zendesk: `403 Forbidden`
 
@@ -958,8 +985,8 @@ Check:
 - `CONFLUENCE_EMAIL` is the Atlassian account that created the token;
 - you copied the full token when it was created;
 - the token has not expired/revoked;
-- for this repo's email+token path you created the standard **Create API token** token, not the scoped-token variant;
-- `CONFLUENCE_OAUTH_TOKEN` is blank when using email + API token.
+- you created the standard **Create API token** token, not the scoped-token variant;
+- `CONFLUENCE_OAUTH_CLIENT_ID` and `CONFLUENCE_OAUTH_CLIENT_SECRET` are blank when using email + API token. If both are filled in, the email and API token are not used.
 
 ## Confluence: `403 Forbidden`
 

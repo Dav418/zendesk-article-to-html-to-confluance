@@ -12,11 +12,16 @@ from urllib3.util.retry import Retry
 
 from zendesk_confluence_migrator.config import ExportSettings, ZendeskSettings
 
+logger = logging.getLogger(__name__)
+# 48 hours is the longest access-token lifetime Zendesk allows.
+_OAUTH_TOKEN_LIFETIME_SECONDS = 172800
+
 
 class ZendeskClient:
     def __init__(self, settings: ZendeskSettings, export_settings: ExportSettings) -> None:
         self._settings = settings
         self._export_settings = export_settings
+        self._login_description = "the Zendesk email and API token"
         self._authenticated_session = self._build_session(authenticated=True)
         self._public_session = self._build_session(authenticated=False)
 
@@ -44,16 +49,60 @@ class ZendeskClient:
         )
 
         if authenticated:
-            if self._settings.oauth_token:
-                session.headers["Authorization"] = f"Bearer {self._settings.oauth_token}"
+            access_token = self._oauth_access_token()
+            if access_token:
+                session.headers["Authorization"] = f"Bearer {access_token}"
             else:
                 assert self._settings.email is not None
                 assert self._settings.api_token is not None
+                self._login_description = "ZENDESK_EMAIL and ZENDESK_API_TOKEN"
                 session.auth = HTTPBasicAuth(
                     f"{self._settings.email}/token",
                     self._settings.api_token,
                 )
         return session
+
+    def _oauth_access_token(self) -> str | None:
+        client_id = self._settings.oauth_client_id
+        client_secret = self._settings.oauth_client_secret
+        if client_id and client_secret:
+            self._login_description = "ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET"
+            logger.info("Asking Zendesk for an access token using the OAuth client Identifier and Secret.")
+            return self._exchange_client_credentials(client_id, client_secret)
+        return None
+
+    def _exchange_client_credentials(self, client_id: str, client_secret: str) -> str:
+        response = requests.post(
+            f"{self._settings.origin}/oauth/tokens",
+            json={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": "hc:read",
+                "expires_in": _OAUTH_TOKEN_LIFETIME_SECONDS,
+            },
+            headers={"Accept": "application/json"},
+            timeout=self._export_settings.request_timeout_seconds,
+        )
+        payload: dict[str, Any] = {}
+        try:
+            parsed = response.json()
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            payload = parsed
+        if response.status_code != 200:
+            detail = payload.get("error_description") or payload.get("error") or "no details"
+            raise RuntimeError(
+                "Zendesk refused the OAuth client Identifier and Secret "
+                f"(HTTP {response.status_code}: {detail}). "
+                "Check ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET. "
+                "The OAuth client must be Confidential and must allow the hc:read scope."
+            )
+        token = payload.get("access_token")
+        if not isinstance(token, str) or not token.strip():
+            raise RuntimeError("Zendesk did not return an access token for the OAuth client.")
+        return token
 
     def get_category(self) -> dict[str, Any]:
         url = (
@@ -147,7 +196,8 @@ class ZendeskClient:
         )
         if response.status_code == 401:
             raise RuntimeError(
-                "Zendesk returned 401 Unauthorized. Check the Zendesk OAuth/API token and email."
+                "Zendesk returned 401 Unauthorized. "
+                f"The login used was {self._login_description}."
             )
         if response.status_code == 403:
             raise RuntimeError(

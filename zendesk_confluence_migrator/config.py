@@ -33,15 +33,54 @@ def _required(name: str) -> str:
     return value
 
 
-def _require_login(*, email_name: str, email_hint: str, token_name: str, token_hint: str, oauth_name: str) -> None:
-    """Fail with the exact empty lines when email+token login is incomplete."""
-    if os.getenv(oauth_name, "").strip():
+def _require_zendesk_login() -> None:
+    """Accept an OAuth client, or email plus an API token."""
+    client_id = os.getenv("ZENDESK_OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.getenv("ZENDESK_OAUTH_CLIENT_SECRET", "").strip()
+    if client_id and client_secret:
         return
-    missing: list[str] = []
-    if not os.getenv(email_name, "").strip():
-        missing.append(f"{email_name} is empty. {email_hint}")
-    if not os.getenv(token_name, "").strip():
-        missing.append(f"{token_name} is empty. {token_hint}")
+    if client_id or client_secret:
+        missing: list[str] = []
+        if not client_id:
+            missing.append(
+                "ZENDESK_OAUTH_CLIENT_ID is empty. Put the OAuth client Identifier there."
+            )
+        if not client_secret:
+            missing.append(
+                "ZENDESK_OAUTH_CLIENT_SECRET is empty. Put the OAuth client Secret there."
+            )
+        raise ValueError("\n".join(missing))
+    missing = []
+    if not os.getenv("ZENDESK_EMAIL", "").strip():
+        missing.append("ZENDESK_EMAIL is empty. Put your Zendesk login email on that line.")
+    if not os.getenv("ZENDESK_API_TOKEN", "").strip():
+        missing.append("ZENDESK_API_TOKEN is empty. Put the Zendesk API token on that line.")
+    if missing:
+        raise ValueError("\n".join(missing))
+
+
+def _require_confluence_login() -> None:
+    """Accept an OAuth client, or email plus an API token."""
+    client_id = os.getenv("CONFLUENCE_OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.getenv("CONFLUENCE_OAUTH_CLIENT_SECRET", "").strip()
+    if client_id and client_secret:
+        return
+    if client_id or client_secret:
+        missing: list[str] = []
+        if not client_id:
+            missing.append("CONFLUENCE_OAUTH_CLIENT_ID is empty. Put the OAuth client ID there.")
+        if not client_secret:
+            missing.append(
+                "CONFLUENCE_OAUTH_CLIENT_SECRET is empty. Put the OAuth client secret there."
+            )
+        raise ValueError("\n".join(missing))
+    missing = []
+    if not os.getenv("CONFLUENCE_EMAIL", "").strip():
+        missing.append(
+            "CONFLUENCE_EMAIL is empty. Put the email you use to log in to Confluence on that line."
+        )
+    if not os.getenv("CONFLUENCE_API_TOKEN", "").strip():
+        missing.append("CONFLUENCE_API_TOKEN is empty. Put the Atlassian API token on that line.")
     if missing:
         raise ValueError("\n".join(missing))
 
@@ -69,6 +108,8 @@ class ZendeskSettings:
     email: str | None
     api_token: str | None
     oauth_token: str | None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +135,8 @@ class ConfluenceSettings:
     existing_title_policy: str
     upload_drafts: bool
     restricted_article_policy: str
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,17 +162,12 @@ class AppConfig:
                 "https://company.zendesk.com/hc/en-gb/categories/123456-category-name"
             )
 
-        zendesk_oauth = os.getenv("ZENDESK_OAUTH_TOKEN", "").strip() or None
+        zendesk_client_id = os.getenv("ZENDESK_OAUTH_CLIENT_ID", "").strip() or None
+        zendesk_client_secret = os.getenv("ZENDESK_OAUTH_CLIENT_SECRET", "").strip() or None
         zendesk_email = os.getenv("ZENDESK_EMAIL", "").strip() or None
         zendesk_api_token = os.getenv("ZENDESK_API_TOKEN", "").strip() or None
         if require_zendesk_auth:
-            _require_login(
-                email_name="ZENDESK_EMAIL",
-                email_hint="Put your Zendesk login email on that line.",
-                token_name="ZENDESK_API_TOKEN",
-                token_hint="Put the Zendesk API token on that line.",
-                oauth_name="ZENDESK_OAUTH_TOKEN",
-            )
+            _require_zendesk_login()
 
         timeout_raw = os.getenv("REQUEST_TIMEOUT_SECONDS", "30").strip()
         try:
@@ -147,7 +185,9 @@ class AppConfig:
             category_id=int(match.group("category_id")),
             email=zendesk_email,
             api_token=zendesk_api_token,
-            oauth_token=zendesk_oauth,
+            oauth_token=None,
+            oauth_client_id=zendesk_client_id,
+            oauth_client_secret=zendesk_client_secret,
         )
         export = ExportSettings(
             output_dir=Path(os.getenv("OUTPUT_DIR", "output").strip() or "output"),
@@ -171,16 +211,11 @@ class AppConfig:
                 base_path = base_path[:-5]
             base_url = f"{base_parsed.scheme}://{base_parsed.netloc}{base_path}".rstrip("/")
 
-            confluence_oauth = os.getenv("CONFLUENCE_OAUTH_TOKEN", "").strip() or None
+            confluence_client_id = os.getenv("CONFLUENCE_OAUTH_CLIENT_ID", "").strip() or None
+            confluence_client_secret = os.getenv("CONFLUENCE_OAUTH_CLIENT_SECRET", "").strip() or None
             confluence_email = os.getenv("CONFLUENCE_EMAIL", "").strip() or None
             confluence_api_token = os.getenv("CONFLUENCE_API_TOKEN", "").strip() or None
-            _require_login(
-                email_name="CONFLUENCE_EMAIL",
-                email_hint="Put the email you use to log in to Confluence on that line.",
-                token_name="CONFLUENCE_API_TOKEN",
-                token_hint="Put the Atlassian API token on that line.",
-                oauth_name="CONFLUENCE_OAUTH_TOKEN",
-            )
+            _require_confluence_login()
 
             title_policy = os.getenv("CONFLUENCE_EXISTING_TITLE_POLICY", "fail").strip().lower()
             if title_policy not in {"fail", "suffix"}:
@@ -199,7 +234,7 @@ class AppConfig:
                 base_url=base_url,
                 email=confluence_email,
                 api_token=confluence_api_token,
-                oauth_token=confluence_oauth,
+                oauth_token=None,
                 space_key=_required("CONFLUENCE_SPACE_KEY"),
                 parent_page_id=_required("CONFLUENCE_PARENT_PAGE_ID"),
                 create_category_root=_parse_bool(
@@ -209,6 +244,8 @@ class AppConfig:
                 existing_title_policy=title_policy,
                 upload_drafts=_parse_bool(os.getenv("CONFLUENCE_UPLOAD_DRAFTS"), False),
                 restricted_article_policy=restricted_policy,
+                oauth_client_id=confluence_client_id,
+                oauth_client_secret=confluence_client_secret,
             )
 
         return cls(zendesk=zendesk, export=export, confluence=confluence)

@@ -49,32 +49,6 @@ if errorlevel 1 goto pipfail
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 goto pipfail
 
-if not exist ".env" goto needenv
-findstr /R "[^ ]" ".env" >nul
-if errorlevel 1 goto needenv
-goto runmigrate
-
-:needenv
-if exist ".env.example" copy /Y ".env.example" ".env" >nul
-echo.
-echo A file named .env must be filled in before the migration can run.
-echo It is in this same folder, next to start.bat:
-echo   %~dp0.env
-echo.
-echo If you cannot see .env in File Explorer:
-echo   1. Open the unzipped folder, the one that contains start.bat.
-echo   2. Click the View menu, then Show.
-echo   3. Tick File name extensions.
-echo   4. Tick Hidden items.
-echo .env is not inside another folder. Do not edit the .venv folder.
-echo Notepad will open .env. Replace every example value, including PASTE_ZENDESK_TOKEN_HERE.
-echo Then use File, Save, close Notepad, and run start.bat again.
-notepad "%~dp0.env"
-pause
-exit /b 1
-
-:runmigrate
-
 ".venv\Scripts\python.exe" migrate.py
 set "EXITCODE=%errorlevel%"
 echo.
